@@ -5,10 +5,8 @@ description = "Add your description here"
 readme = "README.md"
 authors = [{ name = "Edward Boswell", email = "thememium@gmail.com" }]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["dspy>=3.2.0", "pydantic>=2.13.4"]
 
-[project.scripts]
-dspy-rlm-hooks = "dspy_rlm_hooks:main"
 
 [build-system]
 requires = ["uv_build>=0.11.6,<0.12.0"]
@@ -21,7 +19,7 @@ dev = [
   "poethepoet>=0.46.0",
   "pytest>=9.0.3",
   "ruff>=0.15.13",
-  "ty>=0.0.36",
+  "ty>=0.0.37",
   "usechange>=0.1.28",
 ]
 
