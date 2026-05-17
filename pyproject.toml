@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 authors = [{ name = "Edward Boswell", email = "thememium@gmail.com" }]
 requires-python = ">=3.12"
-dependencies = ["dspy>=3.2.0", "pydantic>=2.13.4"]
+dependencies = ["dspy>=3.1.0", "pydantic>=2.0.0"]
 
 
 [build-system]

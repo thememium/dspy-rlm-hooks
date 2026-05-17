@@ -383,8 +383,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dspy", specifier = ">=3.2.0" },
-    { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "dspy", specifier = ">=3.1.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
 ]
 
 [package.metadata.requires-dev]
