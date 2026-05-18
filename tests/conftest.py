@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from dotenv import load_dotenv
+
+# Load environment variables from .env files if present
+for _dotenv in [".env", ".env.local"]:
+    _path = Path(__file__).resolve().parents[1] / _dotenv
+    if _path.exists():
+        load_dotenv(_path, override=True)
 
 
 def pytest_addoption(parser):
