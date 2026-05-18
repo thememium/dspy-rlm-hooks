@@ -52,19 +52,39 @@ Requires **DSPy 3.1+** and **Pydantic 2+**.
 
 ### RLM Hook Lifecycle
 
-```mermaid
-flowchart LR
-    subgraph Iteration["RLM Iteration"]
-        PreIter["pre_iteration_hook"] --> Gen["Generate Code"]
-        Gen --> PreExec["pre_execution_hook"]
-        PreExec --> Exec["Execute Code"]
-        Exec --> PostExec["post_execution_hook"]
-        PostExec --> PostIter["post_iteration_hook"]
-    end
-
-    PreIter -.->|inject vars, prepend code| Gen
-    PreExec -.->|rewrite code| Exec
-    PostExec -.->|transform result| PostIter
+``` 
+┌──────────────────────────┐
+│    pre_iteration_hook    │
+└────────────┬─────────────┘
+             │
+             │ inject vars,
+             │ prepend code
+             ▼
+┌──────────────────────────┐
+│      Generate Code       │
+└────────────┬─────────────┘
+             │
+             ▼
+┌──────────────────────────┐
+│    pre_execution_hook    │
+└────────────┬─────────────┘
+             │
+             │ rewrite code
+             ▼
+┌──────────────────────────┐
+│       Execute Code       │
+└────────────┬─────────────┘
+             │
+             ▼
+┌──────────────────────────┐
+│   post_execution_hook    │
+└────────────┬─────────────┘
+             │
+             │ transform result
+             ▼
+┌──────────────────────────┐
+│   post_iteration_hook    │
+└──────────────────────────┘
 ```
 
 Hooks fire at each stage of an RLM iteration, allowing inspection and modification of behaviour.
