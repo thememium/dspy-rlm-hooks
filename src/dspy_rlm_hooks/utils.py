@@ -32,6 +32,9 @@ def _strip_code_fences(code: str) -> str:
     if "```" not in code:
         return code
 
+    # If there are still fences after stripping plain pairs,
+    # it may be a language-tagged block or multiple blocks.
+    # Strip one more language-tagged fence if present.
     fence_start = code.find("```")
     lang_line, separator, remainder = code[fence_start + 3 :].partition("\n")
     if not separator:
@@ -47,4 +50,7 @@ def _strip_code_fences(code: str) -> str:
     block_end = remainder.find("```")
     if block_end == -1:
         return remainder.strip()
+    if block_end == 0:
+        # Opening and closing fences are adjacent — return everything after
+        return remainder[3:].strip()
     return remainder[:block_end].strip()
