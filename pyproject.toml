@@ -1,12 +1,37 @@
 [project]
 name = "dspy-rlm-hooks"
 version = "0.1.2"
-description = "Add your description here"
+description = "Lifecycle instrumentation for DSPy's RLM (Recursive Language Model)."
 readme = "README.md"
-authors = [{ name = "Edward Boswell", email = "thememium@gmail.com" }]
 requires-python = ">=3.12"
+authors = [{ name = "Edward Boswell", email = "thememium@gmail.com" }]
+keywords = [
+  "dspy",
+  "ai",
+  "recursive language model",
+  "hooks",
+  "instrumentation",
+  "rlm",
+]
+classifiers = [
+  "Operating System :: OS Independent",
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = ["dspy>=3.1.0", "pydantic>=2.0.0"]
+license = "MIT"
+license-files = ["LICEN[CS]E*"]
 
+[project.urls]
+Homepage = "https://github.com/thememium/dspy-rlm-hooks"
+Documentation = "https://github.com/thememium/dspy-rlm-hooks"
+Repository = "https://github.com/thememium/dspy-rlm-hooks.git"
+Issues = "https://github.com/thememium/dspy-rlm-hooks/issues"
+Changelog = "https://github.com/thememium/dspy-rlm-hooks/blob/master/CHANGELOG.md"
 
 [build-system]
 requires = ["uv_build>=0.11.6,<0.12.0"]
@@ -25,17 +50,23 @@ dev = [
   "usechange>=0.1.28",
 ]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dspy_rlm_hooks*"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = ["asyncio: marks tests as async (pytest-asyncio)"]
 filterwarnings = [
-    "ignore::DeprecationWarning:dspy.predict.avatar.signatures",
-    "ignore::DeprecationWarning:dspy.teleprompt.avatar_optimizer",
+  "ignore::DeprecationWarning:dspy.predict.avatar.signatures",
+  "ignore::DeprecationWarning:dspy.teleprompt.avatar_optimizer",
 ]
 
 [tool.deptry]
 known_first_party = ["dspy_rlm_hooks"]
+exclude = ["venv", "\\.venv", "tests", "\\.git"]
+ignore_notebooks = true
 
 [tool.poe.tasks]
 dev = "uv run src/dspy_rlm_hooks/__init__.py"
