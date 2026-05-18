@@ -6,9 +6,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from dspy_rlm_hooks.patcher import (_REQUIRED_METHODS, _execute_code,
-                                    _validate_rlm, disable_rlm_hooks,
-                                    enable_rlm_hooks)
+from dspy_rlm_hooks.patcher import (
+    _REQUIRED_METHODS,
+    _execute_code,
+    _validate_rlm,
+    disable_rlm_hooks,
+    enable_rlm_hooks,
+)
 
 
 class TestValidateRLM:
@@ -81,7 +85,11 @@ class TestDisableCleanup:
 
     def test_disable_is_idempotent(self, mock_rlm):
         """Test that disable_rlm_hooks is safe to call multiple times."""
-        enable_rlm_hooks(mock_rlm, pre_iteration_hook=lambda **kwargs: MagicMock())
+
+        def dummy_hook(iteration, variables, history, input_args):
+            return MagicMock()
+
+        enable_rlm_hooks(mock_rlm, pre_iteration_hook=dummy_hook)
         disable_rlm_hooks(mock_rlm)
         disable_rlm_hooks(mock_rlm)  # Should not raise
         disable_rlm_hooks(mock_rlm)  # Should not raise
@@ -114,7 +122,9 @@ class TestEnableIdempotency:
     def test_enable_overwrites_previous_hooks(self, mock_rlm, pre_iteration_hook):
         """Test that enabling hooks twice replaces previous hooks."""
         hook1 = pre_iteration_hook
-        hook2 = lambda **kwargs: MagicMock()  # noqa: E731
+
+        def hook2(iteration, variables, history, input_args):
+            return MagicMock()
 
         enable_rlm_hooks(mock_rlm, pre_iteration_hook=hook1)
         assert mock_rlm._hook_pre_iteration is hook1
@@ -122,12 +132,15 @@ class TestEnableIdempotency:
         enable_rlm_hooks(mock_rlm, pre_iteration_hook=hook2)
         assert mock_rlm._hook_pre_iteration is hook2
 
-    def test_enable_preserves_unset_hooks(self, mock_rlm, pre_iteration_hook,
-                                           post_execution_hook):
+    def test_enable_preserves_unset_hooks(
+        self, mock_rlm, pre_iteration_hook, post_execution_hook
+    ):
         """Test that enabling with only some hooks preserves others."""
-        enable_rlm_hooks(mock_rlm,
-                          pre_iteration_hook=pre_iteration_hook,
-                          post_execution_hook=post_execution_hook)
+        enable_rlm_hooks(
+            mock_rlm,
+            pre_iteration_hook=pre_iteration_hook,
+            post_execution_hook=post_execution_hook,
+        )
 
         assert mock_rlm._hook_pre_iteration is pre_iteration_hook
         assert mock_rlm._hook_post_execution is post_execution_hook

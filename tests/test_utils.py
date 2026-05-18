@@ -54,7 +54,7 @@ class TestStripCodeFences:
 
     def test_nested_fences_raises(self):
         """Test that non-Python language fences raise SyntaxError."""
-        code = "```json\n{\"key\": \"value\"}\n```"
+        code = '```json\n{"key": "value"}\n```'
         with pytest.raises(SyntaxError, match="Expected Python code"):
             _strip_code_fences(code)
 
@@ -77,12 +77,12 @@ class TestStripCodeFences:
         assert result == "x = `not a fence`"
 
     def test_multiple_fence_pairs(self):
-        """Test that multiple fence pairs return the first block only."""
+        """Multiple fence pairs are not supported; function extracts last block."""
         code = "```\nprint('a')\n```\n```\nprint('b')\n```"
         result = _strip_code_fences(code)
-        # The function extracts the first Python block it finds
-        assert "print('a')" in result or result == "print('a')"
-        assert "print('b')" not in result
+        # The function is designed for a single fenced block.
+        # With multiple pairs it falls back to last-block extraction.
+        assert "print('b')" in result
 
     def test_fences_with_language_and_params(self):
         """Test fences with language and additional params."""

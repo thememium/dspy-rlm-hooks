@@ -6,26 +6,33 @@ from unittest.mock import MagicMock
 
 from dspy.primitives.repl_types import REPLHistory
 
-from dspy_rlm_hooks import (PostExecutionOutput, PostIterationOutput,
-                            PreExecutionOutput, PreIterationOutput,
-                            enable_rlm_hooks)
+from dspy_rlm_hooks import (
+    PostExecutionOutput,
+    PostIterationOutput,
+    PreExecutionOutput,
+    PreIterationOutput,
+    enable_rlm_hooks,
+)
 
 
 class TestHookInvocationOrder:
     """Tests that hooks fire in the correct order during iteration."""
 
-    def test_pre_iteration_hook_receives_correct_args(self, mock_rlm, mock_repl, mock_history,
-                                                       mock_variables, pre_iteration_hook):
+    def test_pre_iteration_hook_receives_correct_args(
+        self, mock_rlm, mock_repl, mock_history, mock_variables, pre_iteration_hook
+    ):
         """Test that pre_iteration hook receives expected arguments."""
         calls = []
 
         def tracking_hook(iteration, variables, history, input_args):
-            calls.append({
-                "iteration": iteration,
-                "variables": variables,
-                "history": history,
-                "input_args": input_args,
-            })
+            calls.append(
+                {
+                    "iteration": iteration,
+                    "variables": variables,
+                    "history": history,
+                    "input_args": input_args,
+                }
+            )
             return PreIterationOutput()
 
         enable_rlm_hooks(mock_rlm, pre_iteration_hook=tracking_hook)
@@ -41,8 +48,7 @@ class TestHookInvocationOrder:
 
         # Call the patched method
         mock_rlm._execute_iteration(
-            mock_repl, mock_variables, mock_history, 0,
-            {"question": "test"}, ["answer"]
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
         assert len(calls) == 1
@@ -51,9 +57,11 @@ class TestHookInvocationOrder:
         assert calls[0]["history"] == mock_history
         assert "question" in calls[0]["input_args"]
 
-    def test_pre_iteration_injects_variables(self, mock_rlm, mock_repl, mock_history,
-                                              mock_variables):
+    def test_pre_iteration_injects_variables(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
         """Test that pre_iteration hook injects extra_vars into input_args."""
+
         def inject_hook(iteration, variables, history, input_args):
             return PreIterationOutput(extra_vars={"debug": True, "count": 42})
 
@@ -66,8 +74,7 @@ class TestHookInvocationOrder:
         mock_rlm._process_execution_result.return_value = mock_history
 
         mock_rlm._execute_iteration(
-            mock_repl, mock_variables, mock_history, 0,
-            {"question": "test"}, ["answer"]
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
         # The generate_action should have been called with updated input_args
@@ -77,9 +84,11 @@ class TestHookInvocationOrder:
         assert call_args.kwargs["variables"]["debug"] is True
         assert call_args.kwargs["variables"]["count"] == 42
 
-    def test_pre_execution_rewrites_code(self, mock_rlm, mock_repl, mock_history,
-                                          mock_variables):
+    def test_pre_execution_rewrites_code(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
         """Test that pre_execution hook can rewrite generated code."""
+
         def rewrite_hook(iteration, code, variables, history, input_args):
             return PreExecutionOutput(code=f"# rewritten\n{code}")
 
@@ -92,17 +101,18 @@ class TestHookInvocationOrder:
         mock_rlm._process_execution_result.return_value = mock_history
 
         mock_rlm._execute_iteration(
-            mock_repl, mock_variables, mock_history, 0,
-            {"question": "test"}, ["answer"]
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
         # Check that repl.execute was called with rewritten code
         call_args = mock_repl.execute.call_args
         assert "# rewritten" in call_args.args[0]
 
-    def test_post_execution_transforms_result(self, mock_rlm, mock_repl, mock_history,
-                                               mock_variables):
+    def test_post_execution_transforms_result(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
         """Test that post_execution hook transforms the execution result."""
+
         def transform_hook(iteration, code, result, variables, history, input_args):
             return PostExecutionOutput(result=f"transformed: {result}")
 
@@ -115,16 +125,16 @@ class TestHookInvocationOrder:
         mock_rlm._process_execution_result.return_value = mock_history
 
         mock_rlm._execute_iteration(
-            mock_repl, mock_variables, mock_history, 0,
-            {"question": "test"}, ["answer"]
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
         # Check that _process_execution_result was called with transformed result
         call_args = mock_rlm._process_execution_result.call_args
         assert "transformed:" in str(call_args.args[2])
 
-    def test_post_iteration_modifies_history(self, mock_rlm, mock_repl, mock_history,
-                                              mock_variables):
+    def test_post_iteration_modifies_history(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
         """Test that post_iteration hook can modify history."""
         modified_history = MagicMock(spec=REPLHistory)
 
@@ -140,15 +150,15 @@ class TestHookInvocationOrder:
         mock_rlm._process_execution_result.return_value = mock_history
 
         result = mock_rlm._execute_iteration(
-            mock_repl, mock_variables, mock_history, 0,
-            {"question": "test"}, ["answer"]
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
         # Result should be the modified history
         assert result is modified_history
 
-    def test_all_hooks_fire_in_order(self, mock_rlm, mock_repl, mock_history,
-                                      mock_variables):
+    def test_all_hooks_fire_in_order(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
         """Test that all four hooks fire in the correct lifecycle order."""
         order = []
 
@@ -183,8 +193,7 @@ class TestHookInvocationOrder:
         mock_rlm._process_execution_result.return_value = mock_history
 
         mock_rlm._execute_iteration(
-            mock_repl, mock_variables, mock_history, 0,
-            {"question": "test"}, ["answer"]
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
         assert order == [
@@ -209,14 +218,15 @@ class TestHookEdgeCases:
         mock_rlm._process_execution_result.return_value = mock_history
 
         mock_rlm._execute_iteration(
-            mock_repl, mock_variables, mock_history, 0,
-            {"question": "test"}, ["answer"]
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
         mock_rlm.generate_action.assert_called_once()
         mock_repl.execute.assert_called_once()
 
-    def test_syntax_error_in_code(self, mock_rlm, mock_repl, mock_history, mock_variables):
+    def test_syntax_error_in_code(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
         """Test that syntax errors in generated code are handled."""
         enable_rlm_hooks(mock_rlm)
 
@@ -227,8 +237,7 @@ class TestHookEdgeCases:
         mock_rlm._process_execution_result.return_value = mock_history
 
         mock_rlm._execute_iteration(
-            mock_repl, mock_variables, mock_history, 0,
-            {"question": "test"}, ["answer"]
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
         # Should have caught syntax error and returned it as result
@@ -236,9 +245,11 @@ class TestHookEdgeCases:
         call_args = mock_rlm._process_execution_result.call_args
         assert "[Error]" in str(call_args.args[2])
 
-    def test_pre_iteration_code_globals(self, mock_rlm, mock_repl, mock_history,
-                                         mock_variables):
+    def test_pre_iteration_code_globals(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
         """Test that pre_iteration python_code is stored in repl_globals."""
+
         def code_hook(iteration, variables, history, input_args):
             return PreIterationOutput(python_code="import math")
 
@@ -251,15 +262,15 @@ class TestHookEdgeCases:
         mock_rlm._process_execution_result.return_value = mock_history
 
         mock_rlm._execute_iteration(
-            mock_repl, mock_variables, mock_history, 0,
-            {"question": "test"}, ["answer"]
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
         # Check that repl_globals was updated
         assert "import math" in mock_repl.repl_globals
 
-    def test_post_iteration_not_called_for_prediction(self, mock_rlm, mock_repl, mock_history,
-                                                       mock_variables):
+    def test_post_iteration_not_called_for_prediction(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
         """Test that post_iteration is only called when result is REPLHistory."""
         post_called = [False]
 
@@ -277,8 +288,7 @@ class TestHookEdgeCases:
         mock_rlm._process_execution_result.return_value = MagicMock()
 
         mock_rlm._execute_iteration(
-            mock_repl, mock_variables, mock_history, 0,
-            {"question": "test"}, ["answer"]
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
         # post_iteration should not be called when result is not REPLHistory

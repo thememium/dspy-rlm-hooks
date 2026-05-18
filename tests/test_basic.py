@@ -7,9 +7,14 @@ from unittest.mock import MagicMock
 import dspy
 import pytest
 
-from dspy_rlm_hooks import (PostExecutionOutput, PostIterationOutput,
-                            PreExecutionOutput, PreIterationOutput,
-                            disable_rlm_hooks, enable_rlm_hooks)
+from dspy_rlm_hooks import (
+    PostExecutionOutput,
+    PostIterationOutput,
+    PreExecutionOutput,
+    PreIterationOutput,
+    disable_rlm_hooks,
+    enable_rlm_hooks,
+)
 
 
 class TestEnableDisableHooks:
@@ -36,8 +41,14 @@ class TestEnableDisableHooks:
         assert mock_rlm._aexecute_iteration is not original_aexecute
         assert hasattr(mock_rlm, "_execute_code")
 
-    def test_enable_all_hooks(self, mock_rlm, pre_iteration_hook, pre_execution_hook,
-                               post_execution_hook, post_iteration_hook):
+    def test_enable_all_hooks(
+        self,
+        mock_rlm,
+        pre_iteration_hook,
+        pre_execution_hook,
+        post_execution_hook,
+        post_iteration_hook,
+    ):
         """Test enabling all four hook types simultaneously."""
         enable_rlm_hooks(
             mock_rlm,
@@ -62,7 +73,9 @@ class TestEnableDisableHooks:
         assert not hasattr(mock_rlm, "_hook_post_execution")
         assert not hasattr(mock_rlm, "_hook_post_iteration")
 
-    def test_disable_rlm_hooks_removes_patched_methods(self, mock_rlm, pre_iteration_hook):
+    def test_disable_rlm_hooks_removes_patched_methods(
+        self, mock_rlm, pre_iteration_hook
+    ):
         """Test that disable_rlm_hooks removes patched methods."""
         enable_rlm_hooks(mock_rlm, pre_iteration_hook=pre_iteration_hook)
         disable_rlm_hooks(mock_rlm)
@@ -129,6 +142,7 @@ class TestHookOutputTypes:
     def test_post_iteration_output(self):
         """Test PostIterationOutput."""
         from dspy.primitives.repl_types import REPLHistory
+
         history = REPLHistory(entries=[])
         output = PostIterationOutput(history=history)
         assert output.history is history

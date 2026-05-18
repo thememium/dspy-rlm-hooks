@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import (AsyncMock, MagicMock)
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -45,6 +45,7 @@ def mock_repl():
 def mock_history():
     """Return a mock REPLHistory."""
     from dspy.primitives.repl_types import REPLHistory
+
     history = MagicMock(spec=REPLHistory)
     history.entries = []
     return history
@@ -90,8 +91,10 @@ def dspy_lm():
 def pre_iteration_hook():
     """Return a simple pre-iteration hook that injects a variable."""
     from dspy_rlm_hooks import PreIterationOutput
+
     def hook(iteration, variables, history, input_args):
         return PreIterationOutput(extra_vars={"injected": True})
+
     return hook
 
 
@@ -99,8 +102,10 @@ def pre_iteration_hook():
 def pre_execution_hook():
     """Return a pre-execution hook that rewrites code."""
     from dspy_rlm_hooks import PreExecutionOutput
+
     def hook(iteration, code, variables, history, input_args):
         return PreExecutionOutput(code=f"# modified\n{code}")
+
     return hook
 
 
@@ -108,8 +113,10 @@ def pre_execution_hook():
 def post_execution_hook():
     """Return a post-execution hook that transforms results."""
     from dspy_rlm_hooks import PostExecutionOutput
+
     def hook(iteration, code, result, variables, history, input_args):
         return PostExecutionOutput(result=f"transformed: {result}")
+
     return hook
 
 
@@ -118,6 +125,8 @@ def post_iteration_hook():
     """Return a post-iteration hook that returns history unchanged."""
 
     from dspy_rlm_hooks import PostIterationOutput
+
     def hook(iteration, pred, code, result, history):
         return PostIterationOutput(history=history)
+
     return hook

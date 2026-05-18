@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import dspy
 import pytest
 
@@ -125,8 +124,7 @@ class TestDSPyVersionCompatibility:
         _validate_rlm(rlm)
 
     @pytest.mark.skipif(
-        not hasattr(dspy, "__version__"),
-        reason="DSPy version not exposed"
+        not hasattr(dspy, "__version__"), reason="DSPy version not exposed"
     )
     def test_specific_version_3_2(self):
         """Test compatibility with DSPy 3.2.x specifically."""
@@ -139,7 +137,11 @@ class TestDSPyVersionCompatibility:
             _validate_rlm(rlm)
 
             from dspy_rlm_hooks import PreIterationOutput
-            enable_rlm_hooks(rlm, pre_iteration_hook=lambda **kwargs: PreIterationOutput())
+
+            def dummy_hook(iteration, variables, history, input_args):
+                return PreIterationOutput()
+
+            enable_rlm_hooks(rlm, pre_iteration_hook=dummy_hook)
 
             assert hasattr(rlm, "_execute_iteration")
             assert hasattr(rlm, "_aexecute_iteration")
