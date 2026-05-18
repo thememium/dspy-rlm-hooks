@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1.4 (2026-05-18)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.3...v0.1.4)
+
+### 📖 Documentation
+
+- **rlm**: replace Mermaid flowchart with ASCII diagram ([b15a553](https://github.com/thememium/dspy-rlm-hooks/commit/b15a5539114a29ddaec58ec9623800df6d1bdc2c))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
 ## v0.1.3 (2026-05-18)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.2...v0.1.3)
