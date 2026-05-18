@@ -184,19 +184,30 @@ def post_execution(iteration, code, result, variables, history, input_args):
         )
     return PostExecutionOutput(result=result)
 
-# ── Post-iteration: enforce iteration budget ──
+# ── Post-iteration: enforce a price budget ──
 
-MAX_ITERATIONS = 5
-current_iter_count = 0
+MAX_COST_USD = 0.50
 
-def post_iteration(iteration, pred, code, result, history: REPLHistory):
-    """Track iterations and stop early if the budget is exhausted."""
-    global current_iter_count
-    current_iter_count += 1
-    if current_iter_count >= MAX_ITERATIONS:
-        # Return empty history to signal stop
-        return PostIterationOutput(history=REPLHistory(entries=[]))
-    return PostIterationOutput(history=history)
+def _estimate_cost(pred):
+    # In production, derive this from response.usage or similar.
+    return 0.015
+
+def make_budget_hook(max_cost=MAX_COST_USD):
+    """Return a post_iteration hook with isolated, per-request state.
+
+    Create a new hook for every RLM session so budgets don't leak
+    across concurrent requests on a multi-threaded or async server.
+    """
+    accumulated_cost = 0.0
+
+    def post_iteration(iteration, pred, code, result, history: REPLHistory):
+        nonlocal accumulated_cost
+        accumulated_cost += _estimate_cost(pred)
+        if accumulated_cost >= max_cost:
+            return PostIterationOutput(history=REPLHistory(entries=[]))
+        return PostIterationOutput(history=history)
+
+    return post_iteration
 
 # ── Wire everything up ──
 
@@ -205,7 +216,7 @@ enable_rlm_hooks(
     pre_iteration_hook=pre_iteration,
     pre_execution_hook=pre_execution,
     post_execution_hook=post_execution,
-    post_iteration_hook=post_iteration,
+    post_iteration_hook=make_budget_hook(max_cost=0.50),
 )
 
 result = rlm(question="Find all TODO comments in the codebase")
