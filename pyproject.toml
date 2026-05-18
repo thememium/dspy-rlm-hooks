@@ -27,9 +27,9 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = [
-    "asyncio: marks tests as async (pytest-asyncio)",
-]
+markers = ["asyncio: marks tests as async (pytest-asyncio)"]
+
+[tool.deptry]
 known_first_party = ["dspy_rlm_hooks"]
 
 [tool.poe.tasks]
