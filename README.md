@@ -204,7 +204,7 @@ def make_budget_hook(max_cost=MAX_COST_USD):
         nonlocal accumulated_cost
         accumulated_cost += _estimate_cost(pred)
         if accumulated_cost >= max_cost:
-            return PostIterationOutput(history=REPLHistory(entries=[]))
+            return PostIterationOutput(history=history, stop=True)
         return PostIterationOutput(history=history)
 
     return post_iteration
@@ -253,7 +253,7 @@ Removes all monkey-patched overrides and reverts to original behaviour.
 | **PreIteration** | Before action generation | Inject variables (`extra_vars`) and persistent code (`python_code`) |
 | **PreExecution** | After code generation, before running | Rewrite or sanitise the generated `code` string |
 | **PostExecution** | After code runs, before history processing | Transform, audit, or replace the raw `result` |
-| **PostIteration** | After result is folded into history | Save learnings, trigger side effects, or modify `history` |
+| **PostIteration** | After result is folded into history | Save learnings, trigger side effects, modify `history`, or set `stop=True` to force final extraction |
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
