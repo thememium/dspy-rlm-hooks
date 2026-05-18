@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.1.5 (2026-05-18)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.4...v0.1.5)
+
+### 🚀 Enhancements
+
+- add post iteration stop command (#2) (#2) ([f323f3d](https://github.com/thememium/dspy-rlm-hooks/commit/f323f3d2517e2d0e30862ecf2e86a0b107118c93))
+
+### 💅 Refactors
+
+- **README.md**: replace iteration limit with USD price budget and per request hook ([b78475b](https://github.com/thememium/dspy-rlm-hooks/commit/b78475be4f9f781513ee80239af89a3d839f346a))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
 ## v0.1.4 (2026-05-18)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.3...v0.1.4)
