@@ -177,6 +177,11 @@ def _execute_iteration(
         post_iter_out = cast(PostIterationOutput, post_iter_out)
         processed = post_iter_out.history
 
+        if post_iter_out.stop:
+            return self._extract_fallback(
+                variables, processed, output_field_names
+            )
+
     return processed
 
 
@@ -271,6 +276,11 @@ async def _aexecute_iteration(
             post_iter_out = await post_iter_out
         post_iter_out = cast(PostIterationOutput, post_iter_out)
         processed = post_iter_out.history
+
+        if post_iter_out.stop:
+            return await self._aextract_fallback(
+                variables, processed, output_field_names
+            )
 
     return processed
 
