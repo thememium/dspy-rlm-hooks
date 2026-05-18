@@ -55,6 +55,13 @@ from dspy_rlm_hooks.types import (
     RLMHook,
 )
 
+try:
+    from importlib.metadata import version
+
+    __version__ = version("dspy-rlm-hooks")
+except ImportError:
+    __version__ = "unknown"
+
 __all__ = [
     "PreIterationHook",
     "PreExecutionHook",

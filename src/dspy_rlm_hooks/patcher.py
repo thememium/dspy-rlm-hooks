@@ -16,9 +16,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from types import MethodType
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
-from dspy.primitives.repl_types import REPLHistory
+from dspy.primitives.prediction import Prediction
+from dspy.primitives.repl_types import REPLHistory, REPLVariable
 
 from dspy_rlm_hooks.types import (
     PostExecutionHook,
@@ -32,11 +33,22 @@ from dspy_rlm_hooks.types import (
 )
 from dspy_rlm_hooks.utils import _strip_code_fences
 
-if TYPE_CHECKING:
-    from dspy.primitives.prediction import Prediction
-    from dspy.primitives.repl_types import REPLVariable
-
 logger = logging.getLogger(__name__)
+
+
+def _run_async(coroutine):
+    """Run an async coroutine, handling both sync and async contexts."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coroutine)
+    else:
+        new_loop = asyncio.new_event_loop()
+        try:
+            return new_loop.run_until_complete(coroutine)
+        finally:
+            new_loop.close()
+
 
 _REQUIRED_METHODS = (
     "_execute_iteration",
@@ -93,7 +105,7 @@ def _execute_iteration(
             iteration, variables, history, input_args
         )
         if asyncio.iscoroutine(pre_iter_out):
-            pre_iter_out = asyncio.run(pre_iter_out)
+            pre_iter_out = _run_async(pre_iter_out)
         pre_iter_out = cast(PreIterationOutput, pre_iter_out)
         input_args = {**input_args, **pre_iter_out.extra_vars}
         if pre_iter_out.python_code:
@@ -133,7 +145,7 @@ def _execute_iteration(
             iteration, code, variables, history, input_args
         )
         if asyncio.iscoroutine(pre_exec_out):
-            pre_exec_out = asyncio.run(pre_exec_out)
+            pre_exec_out = _run_async(pre_exec_out)
         pre_exec_out = cast(PreExecutionOutput, pre_exec_out)
         code = pre_exec_out.code
 
@@ -146,7 +158,7 @@ def _execute_iteration(
             iteration, code, result, variables, history, input_args
         )
         if asyncio.iscoroutine(post_exec_out):
-            post_exec_out = asyncio.run(post_exec_out)
+            post_exec_out = _run_async(post_exec_out)
         post_exec_out = cast(PostExecutionOutput, post_exec_out)
         result = post_exec_out.result
 
@@ -161,11 +173,11 @@ def _execute_iteration(
             iteration, action, code, result, processed
         )
         if asyncio.iscoroutine(post_iter_out):
-            post_iter_out = asyncio.run(post_iter_out)
+            post_iter_out = _run_async(post_iter_out)
         post_iter_out = cast(PostIterationOutput, post_iter_out)
         processed = post_iter_out.history
 
-    return cast(Prediction | REPLHistory, processed)
+    return processed
 
 
 async def _aexecute_iteration(
@@ -260,7 +272,7 @@ async def _aexecute_iteration(
         post_iter_out = cast(PostIterationOutput, post_iter_out)
         processed = post_iter_out.history
 
-    return cast(Prediction | REPLHistory, processed)
+    return processed
 
 
 def enable_rlm_hooks(
