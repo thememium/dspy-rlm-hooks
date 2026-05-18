@@ -17,13 +17,19 @@ dev = [
   "deptry>=0.25.1",
   "isort>=8.0.1",
   "poethepoet>=0.46.0",
+  "pytest-asyncio>=0.26.0",
   "pytest>=9.0.3",
   "ruff>=0.15.13",
   "ty>=0.0.37",
   "usechange>=0.1.28",
 ]
 
-[tool.deptry]
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "asyncio: marks tests as async (pytest-asyncio)",
+]
 known_first_party = ["dspy_rlm_hooks"]
 
 [tool.poe.tasks]
