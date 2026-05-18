@@ -73,9 +73,12 @@ class PostIterationOutput(pydantic.BaseModel):
     Attributes:
         history: The updated history for the next iteration.  Return the same
             history to persist it, or a modified copy to change it.
+        stop: If ``True``, immediately stop iterating and force-extract a final
+            answer using the same extract-fallback path as max-iterations.
     """
 
     history: REPLHistory
+    stop: bool = False
 
 
 @runtime_checkable

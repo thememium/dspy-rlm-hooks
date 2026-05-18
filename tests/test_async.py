@@ -118,6 +118,39 @@ class TestAsyncHooks:
         assert result is modified_history
 
     @pytest.mark.asyncio
+    async def test_async_post_iteration_stop_flag(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
+        """Test that async post_iteration hook with stop=True triggers extract fallback."""
+        from unittest.mock import AsyncMock
+
+        from dspy.primitives.prediction import Prediction
+
+        expected_prediction = Prediction(answer="extracted")
+        mock_rlm._aextract_fallback = AsyncMock(return_value=expected_prediction)
+
+        async def async_stop_hook(iteration, pred, code, result, history):
+            await asyncio.sleep(0)
+            return PostIterationOutput(history=history, stop=True)
+
+        enable_rlm_hooks(mock_rlm, post_iteration_hook=async_stop_hook)
+
+        action = MagicMock()
+        action.code = "print('hello')"
+        action.reasoning = "test"
+        mock_rlm.generate_action.acall = AsyncMock(return_value=action)
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        result = await mock_rlm._aexecute_iteration(
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
+        )
+
+        mock_rlm._aextract_fallback.assert_called_once_with(
+            mock_variables, mock_history, ["answer"]
+        )
+        assert result is expected_prediction
+
+    @pytest.mark.asyncio
     async def test_aexecute_iteration_with_async_hooks(
         self, mock_rlm, mock_repl, mock_history, mock_variables
     ):
