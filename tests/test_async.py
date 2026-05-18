@@ -122,8 +122,9 @@ class TestAsyncHooks:
         self, mock_rlm, mock_repl, mock_history, mock_variables
     ):
         """Test that async post_iteration hook with stop=True triggers extract fallback."""
-        from dspy.primitives.prediction import Prediction
         from unittest.mock import AsyncMock
+
+        from dspy.primitives.prediction import Prediction
 
         expected_prediction = Prediction(answer="extracted")
         mock_rlm._aextract_fallback = AsyncMock(return_value=expected_prediction)

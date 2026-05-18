@@ -178,9 +178,7 @@ def _execute_iteration(
         processed = post_iter_out.history
 
         if post_iter_out.stop:
-            return self._extract_fallback(
-                variables, processed, output_field_names
-            )
+            return self._extract_fallback(variables, processed, output_field_names)
 
     return processed
 
