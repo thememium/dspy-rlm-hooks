@@ -268,6 +268,59 @@ class TestHookEdgeCases:
         # Check that repl_globals was updated
         assert "import math" in mock_repl.repl_globals
 
+    def test_post_iteration_stop_flag_calls_extract_fallback(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
+        """Test that post_iteration hook with stop=True triggers extract fallback."""
+        from dspy.primitives.prediction import Prediction
+
+        expected_prediction = Prediction(answer="extracted")
+        mock_rlm._extract_fallback.return_value = expected_prediction
+
+        def stop_hook(iteration, pred, code, result, history):
+            return PostIterationOutput(history=history, stop=True)
+
+        enable_rlm_hooks(mock_rlm, post_iteration_hook=stop_hook)
+
+        action = MagicMock()
+        action.code = "print('hello')"
+        action.reasoning = "test"
+        mock_rlm.generate_action.return_value = action
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        result = mock_rlm._execute_iteration(
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
+        )
+
+        mock_rlm._extract_fallback.assert_called_once_with(
+            mock_variables, mock_history, ["answer"]
+        )
+        assert result is expected_prediction
+
+    def test_post_iteration_stop_flag_false_continues(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
+        """Test that post_iteration hook with stop=False returns history normally."""
+        modified_history = MagicMock(spec=REPLHistory)
+
+        def continue_hook(iteration, pred, code, result, history):
+            return PostIterationOutput(history=modified_history, stop=False)
+
+        enable_rlm_hooks(mock_rlm, post_iteration_hook=continue_hook)
+
+        action = MagicMock()
+        action.code = "print('hello')"
+        action.reasoning = "test"
+        mock_rlm.generate_action.return_value = action
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        result = mock_rlm._execute_iteration(
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
+        )
+
+        mock_rlm._extract_fallback.assert_not_called()
+        assert result is modified_history
+
     def test_post_iteration_not_called_for_prediction(
         self, mock_rlm, mock_repl, mock_history, mock_variables
     ):
