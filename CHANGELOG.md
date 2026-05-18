@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.1.3 (2026-05-18)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.2...v0.1.3)
+
+### 🚀 Enhancements
+
+- **workflow**: add publish.yml for CI/CD publishing ([459917f](https://github.com/thememium/dspy-rlm-hooks/commit/459917ff2c93921e57408d0a2ef3c64e40603ff2))
+
+### 🏡 Chore
+
+- **pyproject.toml**: remove MIT license classifier ([916a581](https://github.com/thememium/dspy-rlm-hooks/commit/916a581c3fd786de0c039f355795fcab21e3b751))
+- **pyproject**: add descriptive metadata, license, classifiers and package discovery ([51800f0](https://github.com/thememium/dspy-rlm-hooks/commit/51800f02817e798b60916ef4ce63674c6440bba1))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
 ## v0.1.2 (2026-05-18)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.1...v0.1.2)
