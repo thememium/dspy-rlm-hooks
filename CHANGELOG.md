@@ -1,16 +1,24 @@
 # Changelog
 
-## v0.1.5 (2026-05-18)
+## v0.1.6 (2026-06-06)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.5...v0.1.6)
+
+### 🏡 Chore
+
+- bump usechange to 0.1.35 ([6217ddd](https://github.com/thememium/dspy-rlm-hooks/commit/6217dddbce0dc5b0f612dc1c91cec02c92abeea3))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
+## v0.1.5 (2026-06-06)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.4...v0.1.5)
 
-### 🚀 Enhancements
+### 🏡 Chore
 
-- add post iteration stop command (#2) (#2) ([f323f3d](https://github.com/thememium/dspy-rlm-hooks/commit/f323f3d2517e2d0e30862ecf2e86a0b107118c93))
-
-### 💅 Refactors
-
-- **README.md**: replace iteration limit with USD price budget and per request hook ([b78475b](https://github.com/thememium/dspy-rlm-hooks/commit/b78475be4f9f781513ee80239af89a3d839f346a))
+- bump usechange to 0.1.35 ([6217ddd](https://github.com/thememium/dspy-rlm-hooks/commit/6217dddbce0dc5b0f612dc1c91cec02c92abeea3))
 
 ### Contributors
 
