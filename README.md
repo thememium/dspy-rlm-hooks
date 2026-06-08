@@ -280,25 +280,16 @@ enable_rlm_hooks(rlm, pre_execution_hook=sanitize_code)
 result = rlm(query="...")
 ```
 
-### PredictRLM Hook Capabilities
-
-| Hook | dspy.RLM | PredictRLM |
-| --- | --- | --- |
-| **PreIteration** |  Full mutation (inject vars + code) |  Full mutation |
-| **PreExecution** |  Full mutation (rewrite code) |  Full mutation |
-| **PostExecution** |  Full mutation (transform result) |  Full mutation |
-| **PostIteration** |  Full mutation (modify history, stop) |  Full mutation |
-
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Hook Reference
 
-| Hook | When it fires | What it can do | PredictRLM |
-| --- | --- | --- | --- |
-| **PreIteration** | Before action generation | Inject variables (`extra_vars`) and persistent code (`python_code`) |  Full mutation |
-| **PreExecution** | After code generation, before running | Rewrite or sanitise the generated `code` string |  Full mutation |
-| **PostExecution** | After code runs, before history processing | Transform, audit, or replace the raw `result` |  Full mutation |
-| **PostIteration** | After result is folded into history | Save learnings, trigger side effects, modify `history`, or set `stop=True` to force final extraction |  Full mutation |
+| Hook | When it fires | What it can do |
+| --- | --- | --- |
+| **PreIteration** | Before action generation | Inject variables (`extra_vars`) and persistent code (`python_code`) |
+| **PreExecution** | After code generation, before running | Rewrite or sanitise the generated `code` string |
+| **PostExecution** | After code runs, before history processing | Transform, audit, or replace the raw `result` |
+| **PostIteration** | After result is folded into history | Save learnings, trigger side effects, modify `history`, or set `stop=True` to force final extraction |
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
