@@ -24,6 +24,7 @@
     <li><a href="#about">About</a></li>
     <li><a href="#quick-start">Quick Start</a></li>
     <li><a href="#usage">Usage</a></li>
+    <li><a href="#predictrlm-support">PredictRLM Support</a></li>
     <li><a href="#development">Development</a></li>
     <li><a href="#contributing">Contributing</a></li>
     <li><a href="#license">License</a></li>
@@ -41,6 +42,7 @@ DSPy RLM Hooks injects **lifecycle hooks** into DSPy's internal `RLM` iteration 
 - **Result Auditing** — Transform, validate, or retry on errors
 - **History Management** — Inspect and modify the REPL history between iterations
 - **Sync & Async** — Hooks work in either mode; coroutines are auto-detected
+- **PredictRLM Support** — Same hook API works on [PredictRLM](https://github.com/Trampoline-AI/predict-rlm) instances
 
 Requires **DSPy 3.1+** and **Pydantic 2+**.
 
@@ -246,14 +248,57 @@ Removes all monkey-patched overrides and reverts to original behaviour.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
+<!-- PREDICTRLM SUPPORT -->
+
+## PredictRLM Support
+
+`enable_rlm_hooks` works on both `dspy.RLM` and
+[PredictRLM](https://github.com/Trampoline-AI/predict-rlm) with the same API.
+The function auto-detects the RLM type and uses the appropriate mechanism.
+
+Install with the `predict-rlm` extra:
+
+```bash
+uv add "dspy-rlm-hooks[predict-rlm]"
+```
+
+### Quick Example
+
+```python
+from predict_rlm import PredictRLM
+from dspy_rlm_hooks import enable_rlm_hooks, PreExecutionOutput
+
+rlm = PredictRLM("query -> answer")
+
+def sanitize_code(iteration, code, variables, history, input_args):
+    """Block dangerous code patterns."""
+    if "os.system" in code:
+        code = code.replace("os.system", "# BLOCKED")
+    return PreExecutionOutput(code=code)
+
+enable_rlm_hooks(rlm, pre_execution_hook=sanitize_code)
+result = rlm(query="...")
+```
+
+### PredictRLM Hook Capabilities
+
+| Hook | dspy.RLM | PredictRLM |
+| --- | --- | --- |
+| **PreIteration** |  Full mutation (inject vars + code) |  Full mutation |
+| **PreExecution** |  Full mutation (rewrite code) |  Full mutation |
+| **PostExecution** |  Full mutation (transform result) |  Full mutation |
+| **PostIteration** |  Full mutation (modify history, stop) |  Full mutation |
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
 ## Hook Reference
 
-| Hook | When it fires | What it can do |
-| --- | --- | --- |
-| **PreIteration** | Before action generation | Inject variables (`extra_vars`) and persistent code (`python_code`) |
-| **PreExecution** | After code generation, before running | Rewrite or sanitise the generated `code` string |
-| **PostExecution** | After code runs, before history processing | Transform, audit, or replace the raw `result` |
-| **PostIteration** | After result is folded into history | Save learnings, trigger side effects, modify `history`, or set `stop=True` to force final extraction |
+| Hook | When it fires | What it can do | PredictRLM |
+| --- | --- | --- | --- |
+| **PreIteration** | Before action generation | Inject variables (`extra_vars`) and persistent code (`python_code`) |  Full mutation |
+| **PreExecution** | After code generation, before running | Rewrite or sanitise the generated `code` string |  Full mutation |
+| **PostExecution** | After code runs, before history processing | Transform, audit, or replace the raw `result` |  Full mutation |
+| **PostIteration** | After result is folded into history | Save learnings, trigger side effects, modify `history`, or set `stop=True` to force final extraction |  Full mutation |
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
