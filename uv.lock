@@ -292,6 +292,19 @@ wheels = [
 ]
 
 [[package]]
+name = "deno"
+version = "2.8.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d4/b7/9454029a6d509b3be48c34acb6a2d29477e488112ac8075877315896222a/deno-2.8.2.tar.gz", hash = "sha256:d97010c6066a4a8975dd6cb447e214db33a4b0151443a73f740b3d63935c4abe", size = 8166, upload-time = "2026-06-03T13:52:07.336Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/86/13/b7039014bcad913b5d2a26f5ed7dfc67eaedace97e8f937cb2e1a83974c4/deno-2.8.2-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:f82ac8ee9b8faba70bbec1f96f286715a39a66ce1682b3b6a21c576595bd3249", size = 42277702, upload-time = "2026-06-03T13:51:51.681Z" },
+    { url = "https://files.pythonhosted.org/packages/92/51/316121e7402ca738d409382b519253b39502d1982446f8447bf3ca0be1ec/deno-2.8.2-py3-none-macosx_11_0_arm64.whl", hash = "sha256:4f3801521040c2fc9a0cf9a256ddf8ff7782016895d7d1e1446358352e1f123b", size = 38067105, upload-time = "2026-06-03T13:51:54.841Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/77/0c4d95f995548a86cdf3d8298880ced7c2024e6340703d4b1bb64f7dc4f4/deno-2.8.2-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:3fba50581aecf9a572fbcc0399792de68e636d05716bede17c0cbc5fde4d41b4", size = 42048738, upload-time = "2026-06-03T13:51:58.444Z" },
+    { url = "https://files.pythonhosted.org/packages/31/41/6ddd61f17cc5f68dff812e96bfbfd18e7c79b735ed40a1834e5c32bb557e/deno-2.8.2-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:a3610b2ca145358f6fdfeedc6a073e5995ffb2dc19d7f965c4c1f5e0312a9fb3", size = 43761818, upload-time = "2026-06-03T13:52:01.863Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/f9/6f24afd6c2f91dd709d43dfd7cb9613c61387413b43341916f3ea1e54f2e/deno-2.8.2-py3-none-win_amd64.whl", hash = "sha256:c850189d24b8c924412a760aebbff9f9da4961e6a63c132ad135118dd95db8a6", size = 41481437, upload-time = "2026-06-03T13:52:05.026Z" },
+]
+
+[[package]]
 name = "deptry"
 version = "0.25.1"
 source = { registry = "https://pypi.org/simple" }
@@ -370,6 +383,11 @@ dependencies = [
     { name = "pydantic" },
 ]
 
+[package.optional-dependencies]
+predict-rlm = [
+    { name = "predict-rlm" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "deptry" },
@@ -386,8 +404,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "dspy", specifier = ">=3.1.0" },
+    { name = "predict-rlm", marker = "extra == 'predict-rlm'", specifier = ">=0.1.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
 ]
+provides-extras = ["predict-rlm"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1032,6 +1052,15 @@ wheels = [
 ]
 
 [[package]]
+name = "nest-asyncio"
+version = "1.6.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/83/f8/51569ac65d696c8ecbee95938f89d4abf00f47d58d48f6fbabfe8f0baefe/nest_asyncio-1.6.0.tar.gz", hash = "sha256:6f172d5449aca15afd6c646851f4e31e02c598d553a667e38cafa997cfec55fe", size = 7418, upload-time = "2024-01-21T14:25:19.227Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a0/c4/c2971a3ba4c6103a3d10c4b0f24f461ddc027f0f09763220cf35ca1401b3/nest_asyncio-1.6.0-py3-none-any.whl", hash = "sha256:87af6efd6b5e897c81050477ef65c62e2b2f35d51703cae01aff2905b1852e1c", size = 5195, upload-time = "2024-01-21T14:25:17.223Z" },
+]
+
+[[package]]
 name = "numpy"
 version = "2.4.5"
 source = { registry = "https://pypi.org/simple" }
@@ -1202,6 +1231,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/3b/f5/d501fcb67e450fd3fae9db06050420c0c6043758cfa8c30ba40278211265/poethepoet-0.46.0.tar.gz", hash = "sha256:daf8469031879ef59ef0b34fdba83574d65e41eb9186e20cd0f7c89ce479b030", size = 117276, upload-time = "2026-05-15T15:52:02.548Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/af/01/a9d6ea30351919298d3dc237172ae6a60ce0224ecaaee289b671ab979c13/poethepoet-0.46.0-py3-none-any.whl", hash = "sha256:dc6d770a14792d124abac9066c5a707876027d1878ac9ca26cf57e9b2a96dc89", size = 150581, upload-time = "2026-05-15T15:52:01.118Z" },
+]
+
+[[package]]
+name = "predict-rlm"
+version = "0.6.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "deno" },
+    { name = "dspy" },
+    { name = "nest-asyncio" },
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/64/ed/555a3af06530ea4969176677f5a8bcae871d23e385f235c292f53f68d2f1/predict_rlm-0.6.1.tar.gz", hash = "sha256:0210611aa6cfda9af158be6707f590cb3ff00de0595a6129bc65624eef415004", size = 159340, upload-time = "2026-05-14T15:09:09.89Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/af/8027688e24651cb882fb56b39db95d4342f7a80d47961fd323ee95238e47/predict_rlm-0.6.1-py3-none-any.whl", hash = "sha256:a27421eab8062390dae2aef33d14570c4da6ce7369a687541d713b80ee4d81ac", size = 179777, upload-time = "2026-05-14T15:09:08.302Z" },
 ]
 
 [[package]]
