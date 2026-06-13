@@ -75,3 +75,11 @@ __all__ = [
     "enable_rlm_hooks",
     "disable_rlm_hooks",
 ]
+
+# PredictRLM compatibility — available when predict-rlm is installed
+try:
+    from dspy_rlm_hooks.predict_rlm_compat import _is_predict_rlm
+
+    __all__ = [*__all__, "_is_predict_rlm"]
+except ImportError:
+    pass

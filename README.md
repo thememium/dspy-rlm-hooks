@@ -24,6 +24,7 @@
     <li><a href="#about">About</a></li>
     <li><a href="#quick-start">Quick Start</a></li>
     <li><a href="#usage">Usage</a></li>
+    <li><a href="#predictrlm-support">PredictRLM Support</a></li>
     <li><a href="#development">Development</a></li>
     <li><a href="#contributing">Contributing</a></li>
     <li><a href="#license">License</a></li>
@@ -41,6 +42,7 @@ DSPy RLM Hooks injects **lifecycle hooks** into DSPy's internal `RLM` iteration 
 - **Result Auditing** — Transform, validate, or retry on errors
 - **History Management** — Inspect and modify the REPL history between iterations
 - **Sync & Async** — Hooks work in either mode; coroutines are auto-detected
+- **PredictRLM Support** — Same hook API works on [PredictRLM](https://github.com/Trampoline-AI/predict-rlm) instances
 
 Requires **DSPy 3.1+** and **Pydantic 2+**.
 
@@ -243,6 +245,40 @@ disable_rlm_hooks(rlm)
 ```
 
 Removes all monkey-patched overrides and reverts to original behaviour.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+<!-- PREDICTRLM SUPPORT -->
+
+## PredictRLM Support
+
+`enable_rlm_hooks` works on both `dspy.RLM` and
+[PredictRLM](https://github.com/Trampoline-AI/predict-rlm) with the same API.
+The function auto-detects the RLM type and uses the appropriate mechanism.
+
+Install with the `predict-rlm` extra:
+
+```bash
+uv add "dspy-rlm-hooks[predict-rlm]"
+```
+
+### Quick Example
+
+```python
+from predict_rlm import PredictRLM
+from dspy_rlm_hooks import enable_rlm_hooks, PreExecutionOutput
+
+rlm = PredictRLM("query -> answer")
+
+def sanitize_code(iteration, code, variables, history, input_args):
+    """Block dangerous code patterns."""
+    if "os.system" in code:
+        code = code.replace("os.system", "# BLOCKED")
+    return PreExecutionOutput(code=code)
+
+enable_rlm_hooks(rlm, pre_execution_hook=sanitize_code)
+result = rlm(query="...")
+```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

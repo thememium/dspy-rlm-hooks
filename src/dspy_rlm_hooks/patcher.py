@@ -329,6 +329,20 @@ def enable_rlm_hooks(
         ...
         >>> enable_rlm_hooks(rlm, pre_iteration_hook=my_pre_iter)
     """
+    from dspy_rlm_hooks.predict_rlm_compat import _is_predict_rlm
+
+    if _is_predict_rlm(rlm):
+        from dspy_rlm_hooks.predict_rlm_compat import enable_predict_rlm_hooks
+
+        enable_predict_rlm_hooks(
+            rlm,
+            pre_iteration_hook=pre_iteration_hook,
+            pre_execution_hook=pre_execution_hook,
+            post_execution_hook=post_execution_hook,
+            post_iteration_hook=post_iteration_hook,
+        )
+        return
+
     _validate_rlm(rlm)
 
     # Store hook references on the instance
@@ -356,6 +370,14 @@ def disable_rlm_hooks(rlm: Any) -> None:
     Example:
         >>> disable_rlm_hooks(rlm)
     """
+    from dspy_rlm_hooks.predict_rlm_compat import _is_predict_rlm
+
+    if _is_predict_rlm(rlm):
+        from dspy_rlm_hooks.predict_rlm_compat import disable_predict_rlm_hooks
+
+        disable_predict_rlm_hooks(rlm)
+        return
+
     for attr in (
         "_hook_pre_iteration",
         "_hook_pre_execution",

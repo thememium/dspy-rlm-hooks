@@ -32,6 +32,9 @@ Repository = "https://github.com/thememium/dspy-rlm-hooks.git"
 Issues = "https://github.com/thememium/dspy-rlm-hooks/issues"
 Changelog = "https://github.com/thememium/dspy-rlm-hooks/blob/master/CHANGELOG.md"
 
+[project.optional-dependencies]
+predict-rlm = ["predict-rlm>=0.1.0"]
+
 [build-system]
 requires = ["uv_build>=0.11.6,<0.12.0"]
 build-backend = "uv_build"
@@ -66,6 +69,9 @@ filterwarnings = [
 known_first_party = ["dspy_rlm_hooks"]
 exclude = ["venv", "\\.venv", "tests", "\\.git"]
 ignore_notebooks = true
+
+[tool.ty.analysis]
+allowed-unresolved-imports = ["predict_rlm"]
 
 [tool.poe.tasks]
 dev = "uv run src/dspy_rlm_hooks/__init__.py"
