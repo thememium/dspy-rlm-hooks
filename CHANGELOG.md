@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.1.7 (2026-06-13)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.6...v0.1.7)
+
+### 🚀 Enhancements
+
+- **dspy_rlm_hooks**: expose _is_predict_rlm when predict-rlm installed ([9e7efb6](https://github.com/thememium/dspy-rlm-hooks/commit/9e7efb6672131cadc11b94eb5819802dedd228e1))
+- add PredictRLM compatibility layer for dspy-rlm-hooks ([82a5d42](https://github.com/thememium/dspy-rlm-hooks/commit/82a5d42ff5ca27f6beb56e258118dd161ad95351))
+- **patcher**: add PredictRLM hook compatibility ([bf0d7e9](https://github.com/thememium/dspy-rlm-hooks/commit/bf0d7e910b69bec1b0fc47dc723ecb43b7a02631))
+
+### 📖 Documentation
+
+- simplify hook reference tables ([a9816f4](https://github.com/thememium/dspy-rlm-hooks/commit/a9816f4e2bab1406c35cc0c72589a1e9c91e8e01))
+- **README.md**: add PredictRLM support details and updated hook tables ([e7a73b5](https://github.com/thememium/dspy-rlm-hooks/commit/e7a73b563ce097372d219201e7a3d9ada468a18e))
+
+### 🏡 Chore
+
+- **deps**: bump usechange to 0.1.43 ([c68e2cb](https://github.com/thememium/dspy-rlm-hooks/commit/c68e2cbc9ee1cd5f03e71b66e70c5bb9b200f10d))
+- **pyproject**: add optional dependency predict‑rlm ([aeaa057](https://github.com/thememium/dspy-rlm-hooks/commit/aeaa0575bc53d13531d229bc6d9b844b688c742f))
+- add .omo and .plansas to .gitignore ([06660b9](https://github.com/thememium/dspy-rlm-hooks/commit/06660b9fefd0660eab7d0bc99e526da135c71c07))
+
+### ✅ Tests
+
+- add extensive tests for dspy_rlm_hooks.predict_rlm_compat ([b3c93db](https://github.com/thememium/dspy-rlm-hooks/commit/b3c93db3de7e3e5df53b322c4e4014abe085324d))
+
+### Other Changes
+
+- Merge pull request #3 from thememium/feat/adds-predict-rlm-support (#3) ([2ce77d7](https://github.com/thememium/dspy-rlm-hooks/commit/2ce77d75d36425f47580a0e2fcd68267cd986cef))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
 ## v0.1.6 (2026-06-06)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.5...v0.1.6)
