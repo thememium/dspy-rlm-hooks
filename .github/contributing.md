@@ -228,14 +228,15 @@ $ uv run poe release
 ## Project Structure
 
 ```
-├── src/dspy_rlm_hooks/    # Source code
-│   ├── __init__.py        # Main entry point and public API
-│   ├── patcher.py         # Core monkey-patching logic for RLM hooks
-│   ├── types.py           # Dataclasses and type definitions for hook outputs
-│   └── utils.py           # Utility functions
-├── tests/                 # Test files
-├── docs/                  # Documentation assets (if any)
-└── dist/                  # Build output
+├── src/dspy_rlm_hooks/          # Source code
+│   ├── __init__.py              # Main entry point and public API
+│   ├── patcher.py               # Core monkey-patching logic for RLM hooks
+│   ├── predict_rlm_compat.py    # PredictRLM compatibility layer
+│   ├── py.typed                 # PEP 561 marker for type checkers
+│   ├── types.py                 # Dataclasses and type definitions for hook outputs
+│   └── utils.py                 # Utility functions
+├── tests/                       # Test files
+└── examples/                    # Runnable example scripts
 ```
 
 ### Importing Code
