@@ -347,6 +347,8 @@ Quick workflow:
 4. Commit and push
 5. Open a Pull Request
 
+See the [full contributing guide](https://github.com/thememium/dspy-rlm-hooks/blob/master/.github/contributing.md) for detailed setup instructions, project structure, and style guidelines.
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- LICENSE -->
