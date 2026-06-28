@@ -1,0 +1,38 @@
+name: "Feature request"
+description: Suggest an idea or enhancement for dspy-rlm-hooks
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before You Start...**
+
+        - Check if a similar feature has already been requested in [existing issues](https://github.com/thememium/dspy-rlm-hooks/issues)
+        - Read the [documentation](https://github.com/thememium/dspy-rlm-hooks#readme) to see if the feature already exists
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem description
+      description: |
+        A clear description of the problem you're trying to solve.
+        e.g. "I'm always frustrated when..."
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe the solution you'd like to see.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe any alternative solutions or workarounds you've considered.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: |
+        Any other context, code examples, or screenshots about the feature request.
+        If this relates to a specific DSPy or PredictRLM use case, please describe it.
