@@ -348,8 +348,8 @@ class TestWrappedExecuteIteration:
             pre_iteration_hook=inject_hook,
         )
 
-        mock_predict_rlm_instance._execute_iteration(
-            MagicMock(), [], MagicMock(), 0, {"question": "test"}, ["answer"]  # ty: ignore[missing-argument]
+        mock_predict_rlm_instance._execute_iteration(  # ty: ignore[missing-argument]
+            MagicMock(), [], MagicMock(), 0, {"question": "test"}, ["answer"]
         )
 
         assert captured_args.get("debug") is True
@@ -488,8 +488,8 @@ class TestWrappedAexecuteIteration:
             pre_iteration_hook=hook,
         )
 
-        await mock_predict_rlm_instance._aexecute_iteration(
-            MagicMock(), [], MagicMock(), 0, {}, ["answer"]  # ty: ignore[missing-argument]
+        await mock_predict_rlm_instance._aexecute_iteration(  # ty: ignore[missing-argument]
+            MagicMock(), [], MagicMock(), 0, {}, ["answer"]
         )
 
         hook.assert_called_once()
@@ -523,8 +523,8 @@ class TestWrappedAexecuteIteration:
             pre_iteration_hook=async_hook,
         )
 
-        await mock_predict_rlm_instance._aexecute_iteration(
-            MagicMock(), [], MagicMock(), 0, {}, ["answer"]  # ty: ignore[missing-argument]
+        await mock_predict_rlm_instance._aexecute_iteration(  # ty: ignore[missing-argument]
+            MagicMock(), [], MagicMock(), 0, {}, ["answer"]
         )
 
         assert "pre_iteration" in call_order
@@ -557,8 +557,8 @@ class TestWrappedAexecuteIteration:
             pre_iteration_hook=inject_hook,
         )
 
-        await mock_predict_rlm_instance._aexecute_iteration(
-            MagicMock(), [], MagicMock(), 0, {}, ["answer"]  # ty: ignore[missing-argument]
+        await mock_predict_rlm_instance._aexecute_iteration(  # ty: ignore[missing-argument]
+            MagicMock(), [], MagicMock(), 0, {}, ["answer"]
         )
 
         assert captured.get("async_var") is True
@@ -592,8 +592,8 @@ class TestWrappedAexecuteIteration:
         repl = MagicMock()
         repl.repl_globals = ""
 
-        await mock_predict_rlm_instance._aexecute_iteration(
-            repl, [], MagicMock(), 0, {}, ["answer"]  # ty: ignore[missing-argument]
+        await mock_predict_rlm_instance._aexecute_iteration(  # ty: ignore[missing-argument]
+            repl, [], MagicMock(), 0, {}, ["answer"]
         )
 
         assert repl.repl_globals is not None and "import os" in repl.repl_globals
@@ -618,8 +618,8 @@ class TestWrappedAexecuteIteration:
 
         enable_predict_rlm_hooks(mock_predict_rlm_instance)
 
-        result = await mock_predict_rlm_instance._aexecute_iteration(
-            MagicMock(), [], MagicMock(), 0, {}, ["answer"]  # ty: ignore[missing-argument]
+        result = await mock_predict_rlm_instance._aexecute_iteration(  # ty: ignore[missing-argument]
+            MagicMock(), [], MagicMock(), 0, {}, ["answer"]
         )
 
         assert result == "async_stopped"
@@ -647,8 +647,8 @@ class TestWrappedAexecuteIteration:
         mock_vars = [MagicMock()]
         mock_history = MagicMock()
 
-        await mock_predict_rlm_instance._aexecute_iteration(
-            MagicMock(), mock_vars, mock_history, 3, {"q": "test"}, ["answer"]  # ty: ignore[missing-argument]
+        await mock_predict_rlm_instance._aexecute_iteration(  # ty: ignore[missing-argument]
+            MagicMock(), mock_vars, mock_history, 3, {"q": "test"}, ["answer"]
         )
 
         ctx = mock_predict_rlm_instance._hook_current_context
