@@ -601,7 +601,7 @@ class TestWrappedAexecuteIteration:
             repl, [], MagicMock(), 0, {}, ["answer"]
         )
 
-        assert "import os" in repl.repl_globals
+        assert repl.repl_globals is not None and "import os" in repl.repl_globals
 
     @pytest.mark.asyncio
     async def test_async_stop_iteration(self, mock_predict_rlm_instance):
