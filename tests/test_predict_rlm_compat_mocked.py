@@ -127,7 +127,7 @@ class TestIsPredictRLM:
         # Create a fake predict_rlm module with a PredictRLM class
         fake_module = ModuleType("predict_rlm")
         fake_PredictRLM = type("PredictRLM", (), {})
-        fake_module.PredictRLM = fake_PredictRLM
+        setattr(fake_module, "PredictRLM", fake_PredictRLM)
 
         with patch.dict(sys.modules, {"predict_rlm": fake_module}):
             # Create an instance of the fake PredictRLM
@@ -272,13 +272,13 @@ class TestDisablePredictRLMHooks:
 
         # Create a mock that doesn't have _hook_originals
         class NoOriginals:
-            pass
+            def __init__(self) -> None:
+                self._execute_iteration = MagicMock()
+                self._aexecute_iteration = MagicMock()
+                self.generate_action = MagicMock()
+                self._process_execution_result = MagicMock()
 
         no_orig_mock = NoOriginals()
-        no_orig_mock._execute_iteration = MagicMock()
-        no_orig_mock._aexecute_iteration = MagicMock()
-        no_orig_mock.generate_action = MagicMock()
-        no_orig_mock._process_execution_result = MagicMock()
 
         # This should hit the early return path (line 364)
         disable_predict_rlm_hooks(no_orig_mock)
@@ -349,7 +349,12 @@ class TestWrappedExecuteIteration:
         )
 
         mock_predict_rlm_instance._execute_iteration(
-            MagicMock(), [], MagicMock(), 0, {"question": "test"}, ["answer"]
+            repl=MagicMock(),
+            variables=[],
+            history=MagicMock(),
+            iteration=0,
+            input_args={"question": "test"},
+            output_field_names=["answer"],
         )
 
         assert captured_args.get("debug") is True
@@ -444,10 +449,15 @@ class TestWrappedExecuteIteration:
             repl.repl_globals = None
 
         mock_predict_rlm_instance._execute_iteration(
-            repl, [], MagicMock(), 0, {}, ["answer"]
+            repl=repl,
+            variables=[],
+            history=MagicMock(),
+            iteration=0,
+            input_args={},
+            output_field_names=["answer"],
         )
 
-        assert "import os" in repl.repl_globals
+        assert repl.repl_globals is not None and "import os" in repl.repl_globals
 
 
 # ---------------------------------------------------------------------------
