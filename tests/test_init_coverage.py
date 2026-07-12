@@ -5,12 +5,6 @@ Covers version detection and predict_rlm compatibility import paths.
 
 from __future__ import annotations
 
-import importlib
-import sys
-from unittest.mock import patch
-
-import pytest
-
 
 class TestVersionDetection:
     """Tests for version detection in __init__.py."""

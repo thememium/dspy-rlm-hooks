@@ -6,11 +6,8 @@ dependencies to trigger the exception handlers.
 
 from __future__ import annotations
 
-import importlib
 import sys
 from unittest.mock import patch
-
-import pytest
 
 
 class TestVersionFallback:

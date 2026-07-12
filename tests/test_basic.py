@@ -7,9 +7,14 @@ from unittest.mock import MagicMock
 import dspy
 import pytest
 
-from dspy_rlm_hooks import (PostExecutionOutput, PostIterationOutput,
-                            PreExecutionOutput, PreIterationOutput,
-                            disable_rlm_hooks, enable_rlm_hooks)
+from dspy_rlm_hooks import (
+    PostExecutionOutput,
+    PostIterationOutput,
+    PreExecutionOutput,
+    PreIterationOutput,
+    disable_rlm_hooks,
+    enable_rlm_hooks,
+)
 
 
 class TestEnableDisableHooks:

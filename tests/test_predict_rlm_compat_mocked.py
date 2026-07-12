@@ -13,12 +13,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from dspy.primitives.repl_types import REPLHistory
 
-from dspy_rlm_hooks.predict_rlm_compat import (_is_predict_rlm, _run_async,
-                                               _StopIteration,
-                                               disable_predict_rlm_hooks,
-                                               enable_predict_rlm_hooks)
-from dspy_rlm_hooks.types import (PostExecutionOutput, PostIterationOutput,
-                                  PreExecutionOutput, PreIterationOutput)
+from dspy_rlm_hooks.predict_rlm_compat import (
+    _is_predict_rlm,
+    _run_async,
+    _StopIteration,
+    disable_predict_rlm_hooks,
+    enable_predict_rlm_hooks,
+)
+from dspy_rlm_hooks.types import (
+    PostExecutionOutput,
+    PostIterationOutput,
+    PreExecutionOutput,
+    PreIterationOutput,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -63,6 +70,7 @@ class TestRunAsync:
         result = _run_async(async_return("test_value"))
         assert result == "test_value"
 
+    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
     def test_run_async_with_running_loop_creates_new(self):
         """Test _run_async when an event loop is already running.
 
@@ -193,15 +201,26 @@ class TestEnablePredictRLMHooks:
         assert mock_predict_rlm_instance._hook_post_iteration is None
 
     def test_enable_is_idempotent(self, mock_predict_rlm_instance):
-        """Test calling enable twice doesn't double-wrap."""
+        """Test calling enable twice doesn't double-wrap.
+
+        The second enable should disable first (restoring originals),
+        then create new wrappers. So the wrappers will be different objects
+        but the originals should be the same.
+        """
+        # Store the original method before any enable
+        original_exec = mock_predict_rlm_instance._execute_iteration
+
         enable_predict_rlm_hooks(mock_predict_rlm_instance)
         first_exec = mock_predict_rlm_instance._execute_iteration
+        first_originals = mock_predict_rlm_instance._hook_originals.copy()
 
         enable_predict_rlm_hooks(mock_predict_rlm_instance)
         second_exec = mock_predict_rlm_instance._execute_iteration
+        second_originals = mock_predict_rlm_instance._hook_originals
 
-        originals = mock_predict_rlm_instance._hook_originals
-        assert "_execute_iteration" in originals
+        # Both should wrap the same original
+        assert first_originals["_execute_iteration"] is second_originals["_execute_iteration"]
+        assert "_execute_iteration" in second_originals
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +266,6 @@ class TestDisablePredictRLMHooks:
         # MagicMock auto-creates attributes, so we need to explicitly
         # make _hook_originals not exist or be empty
         # Use a spec to prevent auto-creation of _hook_originals
-        from unittest.mock import PropertyMock
 
         # Create a mock that doesn't have _hook_originals
         class NoOriginals:
@@ -304,7 +322,16 @@ class TestWrappedExecuteIteration:
         captured_args = {}
 
         # Set up the original mock to capture what it receives
-        def capture_fn(self, repl, variables, history, iteration, input_args, output_field_names, **kw):
+        def capture_fn(
+            self,
+            repl,
+            variables,
+            history,
+            iteration,
+            input_args,
+            output_field_names,
+            **kw,
+        ):
             captured_args.update(input_args)
             return "result"
 
@@ -434,7 +461,16 @@ class TestWrappedAexecuteIteration:
         hook = MagicMock(return_value=PreIterationOutput())
 
         # Set up the original mock to be awaitable
-        async def mock_aexecute(self, repl, variables, history, iteration, input_args, output_field_names, **kw):
+        async def mock_aexecute(
+            self,
+            repl,
+            variables,
+            history,
+            iteration,
+            input_args,
+            output_field_names,
+            **kw,
+        ):
             return "result"
 
         mock_predict_rlm_instance._aexecute_iteration = mock_aexecute
@@ -460,7 +496,16 @@ class TestWrappedAexecuteIteration:
             await asyncio.sleep(0)
             return PreIterationOutput()
 
-        async def mock_aexecute(self, repl, variables, history, iteration, input_args, output_field_names, **kw):
+        async def mock_aexecute(
+            self,
+            repl,
+            variables,
+            history,
+            iteration,
+            input_args,
+            output_field_names,
+            **kw,
+        ):
             return "result"
 
         mock_predict_rlm_instance._aexecute_iteration = mock_aexecute
@@ -481,7 +526,16 @@ class TestWrappedAexecuteIteration:
         """Test that pre_iteration_hook injects vars in async path."""
         captured = {}
 
-        async def capture_aexecute(self, repl, variables, history, iteration, input_args, output_field_names, **kw):
+        async def capture_aexecute(
+            self,
+            repl,
+            variables,
+            history,
+            iteration,
+            input_args,
+            output_field_names,
+            **kw,
+        ):
             captured.update(input_args)
             return "result"
 
@@ -508,7 +562,16 @@ class TestWrappedAexecuteIteration:
         def code_hook(iteration, variables, history, input_args):
             return PreIterationOutput(python_code="import os")
 
-        async def mock_aexecute(self, repl, variables, history, iteration, input_args, output_field_names, **kw):
+        async def mock_aexecute(
+            self,
+            repl,
+            variables,
+            history,
+            iteration,
+            input_args,
+            output_field_names,
+            **kw,
+        ):
             return "result"
 
         mock_predict_rlm_instance._aexecute_iteration = mock_aexecute
@@ -530,7 +593,17 @@ class TestWrappedAexecuteIteration:
     @pytest.mark.asyncio
     async def test_async_stop_iteration(self, mock_predict_rlm_instance):
         """Test that _StopIteration is caught in async path."""
-        async def mock_aexecute(self, repl, variables, history, iteration, input_args, output_field_names, **kw):
+
+        async def mock_aexecute(
+            self,
+            repl,
+            variables,
+            history,
+            iteration,
+            input_args,
+            output_field_names,
+            **kw,
+        ):
             raise _StopIteration("async_stopped")
 
         mock_predict_rlm_instance._aexecute_iteration = mock_aexecute
@@ -546,7 +619,17 @@ class TestWrappedAexecuteIteration:
     @pytest.mark.asyncio
     async def test_async_context_published(self, mock_predict_rlm_instance):
         """Test that _hook_current_context is set in async path."""
-        async def mock_aexecute(self, repl, variables, history, iteration, input_args, output_field_names, **kw):
+
+        async def mock_aexecute(
+            self,
+            repl,
+            variables,
+            history,
+            iteration,
+            input_args,
+            output_field_names,
+            **kw,
+        ):
             return "result"
 
         mock_predict_rlm_instance._aexecute_iteration = mock_aexecute
@@ -638,12 +721,14 @@ class TestWrappedForward:
         captured_args = []
 
         def capture_hook(iteration, code, variables, history, input_args):
-            captured_args.append({
-                "iteration": iteration,
-                "variables": variables,
-                "history": history,
-                "input_args": input_args,
-            })
+            captured_args.append(
+                {
+                    "iteration": iteration,
+                    "variables": variables,
+                    "history": history,
+                    "input_args": input_args,
+                }
+            )
             return PreExecutionOutput(code=code)
 
         enable_predict_rlm_hooks(
@@ -694,7 +779,9 @@ class TestWrappedForward:
 class TestWrappedProcessResult:
     """Tests for the wrapped _process_execution_result method."""
 
-    def test_post_execution_hook_transforms_result_with_code_arg(self, mock_predict_rlm_instance):
+    def test_post_execution_hook_transforms_result_with_code_arg(
+        self, mock_predict_rlm_instance
+    ):
         """Test post_execution_hook when first arg is a string (code)."""
         captured = {}
 
@@ -721,7 +808,9 @@ class TestWrappedProcessResult:
         assert captured["args"][0] == "test_code"  # code stays in position 0
         assert captured["args"][1] == "TRANSFORMED"  # transformed result in position 1
 
-    def test_post_execution_hook_transforms_result_without_code_arg(self, mock_predict_rlm_instance):
+    def test_post_execution_hook_transforms_result_without_code_arg(
+        self, mock_predict_rlm_instance
+    ):
         """Test post_execution_hook when first arg is NOT a string."""
         captured = {}
 
@@ -846,6 +935,7 @@ class TestWrappedProcessResult:
 
     def test_process_result_no_hooks(self, mock_predict_rlm_instance):
         """Test _process_execution_result with no hooks set."""
+
         def original_process(self, pred, *args, **kwargs):
             return "no_hooks_result"
 
@@ -895,7 +985,9 @@ class TestWrappedProcessResult:
 class TestFullLifecycle:
     """Integration tests for the full hook lifecycle."""
 
-    def test_all_hooks_fire_in_order_via_forward_and_process(self, mock_predict_rlm_instance):
+    def test_all_hooks_fire_in_order_via_forward_and_process(
+        self, mock_predict_rlm_instance
+    ):
         """Test that all hooks fire in lifecycle order."""
         order = []
 

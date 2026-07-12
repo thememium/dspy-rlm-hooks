@@ -6,9 +6,13 @@ from unittest.mock import MagicMock
 
 from dspy.primitives.repl_types import REPLHistory
 
-from dspy_rlm_hooks import (PostExecutionOutput, PostIterationOutput,
-                            PreExecutionOutput, PreIterationOutput,
-                            enable_rlm_hooks)
+from dspy_rlm_hooks import (
+    PostExecutionOutput,
+    PostIterationOutput,
+    PreExecutionOutput,
+    PreIterationOutput,
+    enable_rlm_hooks,
+)
 
 
 class TestHookInvocationOrder:

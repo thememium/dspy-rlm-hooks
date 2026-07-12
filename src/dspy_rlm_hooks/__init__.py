@@ -43,11 +43,17 @@ Public API
 from __future__ import annotations
 
 from dspy_rlm_hooks.patcher import disable_rlm_hooks, enable_rlm_hooks
-from dspy_rlm_hooks.types import (PostExecutionHook, PostExecutionOutput,
-                                  PostIterationHook, PostIterationOutput,
-                                  PreExecutionHook, PreExecutionOutput,
-                                  PreIterationHook, PreIterationOutput,
-                                  RLMHook)
+from dspy_rlm_hooks.types import (
+    PostExecutionHook,
+    PostExecutionOutput,
+    PostIterationHook,
+    PostIterationOutput,
+    PreExecutionHook,
+    PreExecutionOutput,
+    PreIterationHook,
+    PreIterationOutput,
+    RLMHook,
+)
 
 try:
     from importlib.metadata import version
