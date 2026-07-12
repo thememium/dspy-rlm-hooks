@@ -349,12 +349,7 @@ class TestWrappedExecuteIteration:
         )
 
         mock_predict_rlm_instance._execute_iteration(
-            repl=MagicMock(),
-            variables=[],
-            history=MagicMock(),
-            iteration=0,
-            input_args={"question": "test"},
-            output_field_names=["answer"],
+            MagicMock(), [], MagicMock(), 0, {"question": "test"}, ["answer"], ["answer"]
         )
 
         assert captured_args.get("debug") is True
