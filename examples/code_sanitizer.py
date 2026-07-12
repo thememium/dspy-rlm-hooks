@@ -24,6 +24,8 @@ def sanitize_code(
     variables: list,
     history: list,
     input_args: dict,
+    *,
+    raw_code: str = "",
 ) -> PreExecutionOutput:
     """Block forbidden patterns and log when something is caught."""
     if FORBIDDEN.search(code):

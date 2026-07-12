@@ -24,6 +24,8 @@ def retry_with_hint(
     variables: list,
     history: list,
     input_args: dict,
+    *,
+    raw_code: str = "",
 ) -> PostExecutionOutput:
     """If execution raised an error, append a hint for the next iteration."""
     if isinstance(result, str) and result.startswith("[Error]"):
