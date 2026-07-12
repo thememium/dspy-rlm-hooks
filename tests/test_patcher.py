@@ -6,13 +6,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from dspy_rlm_hooks.patcher import (
-    _REQUIRED_METHODS,
-    _execute_code,
-    _validate_rlm,
-    disable_rlm_hooks,
-    enable_rlm_hooks,
-)
+from dspy_rlm_hooks.patcher import (_REQUIRED_METHODS, _execute_code,
+                                    _validate_rlm, disable_rlm_hooks,
+                                    enable_rlm_hooks)
 
 
 class TestValidateRLM:

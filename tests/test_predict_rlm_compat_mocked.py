@@ -12,20 +12,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from dspy.primitives.repl_types import REPLHistory
 
-from dspy_rlm_hooks.predict_rlm_compat import (
-    _StopIteration,
-    _is_predict_rlm,
-    _run_async,
-    disable_predict_rlm_hooks,
-    enable_predict_rlm_hooks,
-)
-from dspy_rlm_hooks.types import (
-    PostExecutionOutput,
-    PostIterationOutput,
-    PreExecutionOutput,
-    PreIterationOutput,
-)
-
+from dspy_rlm_hooks.predict_rlm_compat import (_is_predict_rlm, _run_async,
+                                               _StopIteration,
+                                               disable_predict_rlm_hooks,
+                                               enable_predict_rlm_hooks)
+from dspy_rlm_hooks.types import (PostExecutionOutput, PostIterationOutput,
+                                  PreExecutionOutput, PreIterationOutput)
 
 # ---------------------------------------------------------------------------
 # Fixtures

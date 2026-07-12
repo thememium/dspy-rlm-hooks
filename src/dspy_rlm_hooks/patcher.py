@@ -21,16 +21,10 @@ from typing import Any, cast
 from dspy.primitives.prediction import Prediction
 from dspy.primitives.repl_types import REPLHistory, REPLVariable
 
-from dspy_rlm_hooks.types import (
-    PostExecutionHook,
-    PostExecutionOutput,
-    PostIterationHook,
-    PostIterationOutput,
-    PreExecutionHook,
-    PreExecutionOutput,
-    PreIterationHook,
-    PreIterationOutput,
-)
+from dspy_rlm_hooks.types import (PostExecutionHook, PostExecutionOutput,
+                                  PostIterationHook, PostIterationOutput,
+                                  PreExecutionHook, PreExecutionOutput,
+                                  PreIterationHook, PreIterationOutput)
 from dspy_rlm_hooks.utils import _strip_code_fences
 
 logger = logging.getLogger(__name__)
