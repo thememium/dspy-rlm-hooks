@@ -52,7 +52,7 @@ class TestEndToEnd:
 
         captured_code = []
 
-        def pre_exec(iteration, code, variables, history, input_args):
+        def pre_exec(iteration, code, variables, history, input_args, *, raw_code=""):
             captured_code.append(code)
             return PreExecutionOutput(code=code)
 
@@ -78,7 +78,9 @@ class TestEndToEnd:
 
         captured_results = []
 
-        def post_exec(iteration, code, result, variables, history, input_args):
+        def post_exec(
+            iteration, code, result, variables, history, input_args, *, raw_code=""
+        ):
             captured_results.append(result)
             return PostExecutionOutput(result=result)
 
@@ -107,11 +109,13 @@ class TestEndToEnd:
             order.append("pre_iteration")
             return PreIterationOutput()
 
-        def pre_exec(iteration, code, variables, history, input_args):
+        def pre_exec(iteration, code, variables, history, input_args, *, raw_code=""):
             order.append("pre_execution")
             return PreExecutionOutput(code=code)
 
-        def post_exec(iteration, code, result, variables, history, input_args):
+        def post_exec(
+            iteration, code, result, variables, history, input_args, *, raw_code=""
+        ):
             order.append("post_execution")
             return PostExecutionOutput(result=result)
 
