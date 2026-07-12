@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.1.8 (2026-07-12)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.7...v0.1.8)
+
+### 🚀 Enhancements
+
+- **example**: add async context injection example ([a717488](https://github.com/thememium/dspy-rlm-hooks/commit/a7174886ef3a9d4f6d9061422199a323e5835888))
+- add feature request issue template ([875760b](https://github.com/thememium/dspy-rlm-hooks/commit/875760b8857de51c81d664015e4c6f2356842bce))
+- **dspy_rlm_hooks**: add py.typed to enable static type checking ([8d12e90](https://github.com/thememium/dspy-rlm-hooks/commit/8d12e9027c58f33ad7f88d1c0f7ea49f70d5eef2))
+- **pyproject.toml**: add pytest‑cov and test‑cov script ([7cf0840](https://github.com/thememium/dspy-rlm-hooks/commit/7cf0840b74847c47f6f34a93976eff87cc79bdf2))
+
+### 📖 Documentation
+
+- add error_retry example demonstrating post_execution_hook usage ([8c2572c](https://github.com/thememium/dspy-rlm-hooks/commit/8c2572cf3716518974ec3613a4eaace8decf4fa5))
+- add code_sanitizer example to demonstrate pre_execution_hook safety ([449ac22](https://github.com/thememium/dspy-rlm-hooks/commit/449ac2275cff28e2e83087a9916680367e783078))
+- add budget guard example for cost control ([92c1ddb](https://github.com/thememium/dspy-rlm-hooks/commit/92c1ddb5d36fa838a7108e2a5890529d5a775fb6))
+- **README**: add full contributing guide link for detailed setup instructions ([b7bdbcd](https://github.com/thememium/dspy-rlm-hooks/commit/b7bdbcddba5f8a38e3c97f8313fcc4e304898536))
+- **contributing**: update project structure section with new files and examples ([f4fb3c9](https://github.com/thememium/dspy-rlm-hooks/commit/f4fb3c96754a86ec6ab5478c21aa2a901ddba3d4))
+- add pull‑request template ([4f419dc](https://github.com/thememium/dspy-rlm-hooks/commit/4f419dc0376c4813e18830f044a401a42c356a30))
+
+### 🏡 Chore
+
+- **pyproject.toml**: bump usechange to 0.1.44 ([f3d43f1](https://github.com/thememium/dspy-rlm-hooks/commit/f3d43f1fdf4815a859778320e4989ad318f7521b))
+- **auto**: delete obsolete coverage artifacts and scripts ([537e495](https://github.com/thememium/dspy-rlm-hooks/commit/537e4958d6a590f8aaf0ee990a0e7a9536de4f4e))
+- add .auto to .gitignore ([79145ea](https://github.com/thememium/dspy-rlm-hooks/commit/79145eacc3151745f12d5d5e3b07a49b4ccccb20))
+
+### ✅ Tests
+
+- improve test coverage (#4) (#4) ([caeb48f](https://github.com/thememium/dspy-rlm-hooks/commit/caeb48fc8d3853ad668bbea857efd05af22858e8))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
 ## v0.1.7 (2026-06-13)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.6...v0.1.7)
