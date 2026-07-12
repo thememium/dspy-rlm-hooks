@@ -89,7 +89,9 @@ class TestHookInvocationOrder:
     ):
         """Test that pre_execution hook can rewrite generated code."""
 
-        def rewrite_hook(iteration, code, variables, history, input_args):
+        def rewrite_hook(
+            iteration, code, variables, history, input_args, *, raw_code=""
+        ):
             return PreExecutionOutput(code=f"# rewritten\n{code}")
 
         enable_rlm_hooks(mock_rlm, pre_execution_hook=rewrite_hook)
@@ -113,7 +115,9 @@ class TestHookInvocationOrder:
     ):
         """Test that post_execution hook transforms the execution result."""
 
-        def transform_hook(iteration, code, result, variables, history, input_args):
+        def transform_hook(
+            iteration, code, result, variables, history, input_args, *, raw_code=""
+        ):
             return PostExecutionOutput(result=f"transformed: {result}")
 
         enable_rlm_hooks(mock_rlm, post_execution_hook=transform_hook)
@@ -166,11 +170,13 @@ class TestHookInvocationOrder:
             order.append("pre_iteration")
             return PreIterationOutput()
 
-        def pre_exec(iteration, code, variables, history, input_args):
+        def pre_exec(iteration, code, variables, history, input_args, *, raw_code=""):
             order.append("pre_execution")
             return PreExecutionOutput(code=code)
 
-        def post_exec(iteration, code, result, variables, history, input_args):
+        def post_exec(
+            iteration, code, result, variables, history, input_args, *, raw_code=""
+        ):
             order.append("post_execution")
             return PostExecutionOutput(result=result)
 
@@ -346,3 +352,132 @@ class TestHookEdgeCases:
 
         # post_iteration should not be called when result is not REPLHistory
         assert post_called[0] is False
+
+
+class TestRawCodeParameter:
+    """Tests for the raw_code parameter in pre_execution and post_execution hooks."""
+
+    def test_pre_execution_receives_raw_code(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
+        """Test that pre_execution hook receives raw_code before fence stripping."""
+        raw_codes = []
+
+        def tracking_hook(
+            iteration, code, variables, history, input_args, *, raw_code=""
+        ):
+            raw_codes.append(raw_code)
+            return PreExecutionOutput(code=code)
+
+        enable_rlm_hooks(mock_rlm, pre_execution_hook=tracking_hook)
+
+        # Code with fences that will be stripped
+        action = MagicMock()
+        action.code = "```python\nprint('hello')\n```"
+        action.reasoning = "test"
+        mock_rlm.generate_action.return_value = action
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        mock_rlm._execute_iteration(
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
+        )
+
+        assert len(raw_codes) == 1
+        assert raw_codes[0] == "```python\nprint('hello')\n```"
+
+    def test_post_execution_receives_raw_code(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
+        """Test that post_execution hook receives raw_code before fence stripping."""
+        raw_codes = []
+
+        def tracking_hook(
+            iteration, code, result, variables, history, input_args, *, raw_code=""
+        ):
+            raw_codes.append(raw_code)
+            return PostExecutionOutput(result=result)
+
+        enable_rlm_hooks(mock_rlm, post_execution_hook=tracking_hook)
+
+        # Code with fences that will be stripped
+        action = MagicMock()
+        action.code = "```python\nprint('hello')\n```"
+        action.reasoning = "test"
+        mock_rlm.generate_action.return_value = action
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        mock_rlm._execute_iteration(
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
+        )
+
+        assert len(raw_codes) == 1
+        assert raw_codes[0] == "```python\nprint('hello')\n```"
+
+    def test_raw_code_preserves_multiple_blocks(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
+        """Test that raw_code preserves multiple code blocks that would be lost."""
+        raw_codes = []
+        stripped_codes = []
+
+        def tracking_hook(
+            iteration, code, variables, history, input_args, *, raw_code=""
+        ):
+            raw_codes.append(raw_code)
+            stripped_codes.append(code)
+            return PreExecutionOutput(code=code)
+
+        enable_rlm_hooks(mock_rlm, pre_execution_hook=tracking_hook)
+
+        # Code with multiple blocks - only first block survives stripping
+        multi_block_code = """```python
+x = 1
+```
+Some explanation
+```python
+y = 2
+```"""
+        action = MagicMock()
+        action.code = multi_block_code
+        action.reasoning = "test"
+        mock_rlm.generate_action.return_value = action
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        mock_rlm._execute_iteration(
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
+        )
+
+        assert len(raw_codes) == 1
+        # raw_code should have the full multi-block code
+        assert raw_codes[0] == multi_block_code
+        # stripped code should only have the first block
+        assert "x = 1" in stripped_codes[0]
+        assert "y = 2" not in stripped_codes[0]
+
+    def test_raw_code_empty_when_no_fences(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
+        """Test that raw_code is still provided even when no fences exist."""
+        raw_codes = []
+
+        def tracking_hook(
+            iteration, code, variables, history, input_args, *, raw_code=""
+        ):
+            raw_codes.append(raw_code)
+            return PreExecutionOutput(code=code)
+
+        enable_rlm_hooks(mock_rlm, pre_execution_hook=tracking_hook)
+
+        # Code without fences
+        action = MagicMock()
+        action.code = "print('hello')"
+        action.reasoning = "test"
+        mock_rlm.generate_action.return_value = action
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        mock_rlm._execute_iteration(
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
+        )
+
+        assert len(raw_codes) == 1
+        assert raw_codes[0] == "print('hello')"
