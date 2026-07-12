@@ -230,7 +230,23 @@ class TestDisablePredictRLMHooks:
 
     def test_disable_on_unpatched_is_noop(self, mock_predict_rlm_instance):
         """Test that disable on an unpatched instance is a no-op."""
-        disable_predict_rlm_hooks(mock_predict_rlm_instance)
+        # MagicMock auto-creates attributes, so we need to explicitly
+        # make _hook_originals not exist or be empty
+        # Use a spec to prevent auto-creation of _hook_originals
+        from unittest.mock import PropertyMock
+
+        # Create a mock that doesn't have _hook_originals
+        class NoOriginals:
+            pass
+
+        no_orig_mock = NoOriginals()
+        no_orig_mock._execute_iteration = MagicMock()
+        no_orig_mock._aexecute_iteration = MagicMock()
+        no_orig_mock.generate_action = MagicMock()
+        no_orig_mock._process_execution_result = MagicMock()
+
+        # This should hit the early return path (line 364)
+        disable_predict_rlm_hooks(no_orig_mock)
 
 
 # ---------------------------------------------------------------------------
