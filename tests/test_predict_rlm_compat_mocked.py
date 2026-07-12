@@ -201,14 +201,14 @@ class TestEnablePredictRLMHooks:
         but the originals should be the same.
         """
         # Store the original method before any enable
-        original_exec = mock_predict_rlm_instance._execute_iteration
+        _original_exec = mock_predict_rlm_instance._execute_iteration
 
         enable_predict_rlm_hooks(mock_predict_rlm_instance)
-        first_exec = mock_predict_rlm_instance._execute_iteration
+        _first_exec = mock_predict_rlm_instance._execute_iteration
         first_originals = mock_predict_rlm_instance._hook_originals.copy()
 
         enable_predict_rlm_hooks(mock_predict_rlm_instance)
-        second_exec = mock_predict_rlm_instance._execute_iteration
+        _second_exec = mock_predict_rlm_instance._execute_iteration
         second_originals = mock_predict_rlm_instance._hook_originals
 
         # Both should wrap the same original
