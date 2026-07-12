@@ -130,6 +130,7 @@ def _execute_iteration(
         )
 
     # --- strip fences ---
+    raw_code = action.code  # Preserve original before stripping
     try:
         code = _strip_code_fences(action.code)
     except SyntaxError as exc:
@@ -142,7 +143,7 @@ def _execute_iteration(
     # --- pre-execution hook ---
     if self._hook_pre_execution:
         pre_exec_out = self._hook_pre_execution(
-            iteration, code, variables, history, input_args
+            iteration, code, variables, history, input_args, raw_code=raw_code
         )
         if asyncio.iscoroutine(pre_exec_out):
             pre_exec_out = _run_async(pre_exec_out)
@@ -155,7 +156,7 @@ def _execute_iteration(
     # --- post-execution hook ---
     if self._hook_post_execution:
         post_exec_out = self._hook_post_execution(
-            iteration, code, result, variables, history, input_args
+            iteration, code, result, variables, history, input_args, raw_code=raw_code
         )
         if asyncio.iscoroutine(post_exec_out):
             post_exec_out = _run_async(post_exec_out)
@@ -228,6 +229,7 @@ async def _aexecute_iteration(
         )
 
     # --- strip fences ---
+    raw_code = pred.code  # Preserve original before stripping
     try:
         code = _strip_code_fences(pred.code)
     except SyntaxError as exc:
@@ -240,7 +242,7 @@ async def _aexecute_iteration(
     # --- pre-execution hook ---
     if self._hook_pre_execution:
         pre_exec_out = self._hook_pre_execution(
-            iteration, code, variables, history, input_args
+            iteration, code, variables, history, input_args, raw_code=raw_code
         )
         if asyncio.iscoroutine(pre_exec_out):
             pre_exec_out = await pre_exec_out
@@ -253,7 +255,7 @@ async def _aexecute_iteration(
     # --- post-execution hook ---
     if self._hook_post_execution:
         post_exec_out = self._hook_post_execution(
-            iteration, code, result, variables, history, input_args
+            iteration, code, result, variables, history, input_args, raw_code=raw_code
         )
         if asyncio.iscoroutine(post_exec_out):
             post_exec_out = await post_exec_out
