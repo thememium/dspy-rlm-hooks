@@ -19,10 +19,8 @@ import pytest
 predict_rlm = pytest.importorskip("predict_rlm")
 
 from dspy_rlm_hooks.predict_rlm_compat import _is_predict_rlm  # noqa: E402
-from dspy_rlm_hooks.predict_rlm_compat import \
-    disable_predict_rlm_hooks  # noqa: E402
-from dspy_rlm_hooks.predict_rlm_compat import \
-    enable_predict_rlm_hooks  # noqa: E402
+from dspy_rlm_hooks.predict_rlm_compat import disable_predict_rlm_hooks  # noqa: E402
+from dspy_rlm_hooks.predict_rlm_compat import enable_predict_rlm_hooks  # noqa: E402
 from dspy_rlm_hooks.types import PostExecutionOutput  # noqa: E402
 from dspy_rlm_hooks.types import PostIterationOutput  # noqa: E402
 from dspy_rlm_hooks.types import PreExecutionOutput  # noqa: E402

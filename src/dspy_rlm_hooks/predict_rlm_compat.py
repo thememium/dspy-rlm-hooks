@@ -27,8 +27,12 @@ import logging
 from types import MethodType
 from typing import Any, cast
 
-from dspy_rlm_hooks.types import (PostExecutionOutput, PostIterationOutput,
-                                  PreExecutionOutput, PreIterationOutput)
+from dspy_rlm_hooks.types import (
+    PostExecutionOutput,
+    PostIterationOutput,
+    PreExecutionOutput,
+    PreIterationOutput,
+)
 from dspy_rlm_hooks.utils import _strip_code_fences
 
 logger = logging.getLogger(__name__)

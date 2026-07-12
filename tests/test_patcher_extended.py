@@ -15,8 +15,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dspy_rlm_hooks import (PreExecutionOutput, PreIterationOutput,
-                            disable_rlm_hooks, enable_rlm_hooks)
+from dspy_rlm_hooks import (
+    PreExecutionOutput,
+    PreIterationOutput,
+    disable_rlm_hooks,
+    enable_rlm_hooks,
+)
 from dspy_rlm_hooks.patcher import _run_async
 
 # ---------------------------------------------------------------------------
