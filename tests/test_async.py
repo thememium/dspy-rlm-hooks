@@ -50,7 +50,9 @@ class TestAsyncHooks:
     ):
         """Test that async pre_execution hooks are awaited correctly."""
 
-        async def async_hook(iteration, code, variables, history, input_args):
+        async def async_hook(
+            iteration, code, variables, history, input_args, *, raw_code=""
+        ):
             await asyncio.sleep(0)
             return PreExecutionOutput(code=f"# async\n{code}")
 
@@ -74,7 +76,9 @@ class TestAsyncHooks:
     ):
         """Test that async post_execution hooks are awaited correctly."""
 
-        async def async_hook(iteration, code, result, variables, history, input_args):
+        async def async_hook(
+            iteration, code, result, variables, history, input_args, *, raw_code=""
+        ):
             await asyncio.sleep(0)
             return PostExecutionOutput(result="async_result")
 
@@ -162,13 +166,15 @@ class TestAsyncHooks:
             await asyncio.sleep(0)
             return PreIterationOutput()
 
-        async def async_pre_exec(iteration, code, variables, history, input_args):
+        async def async_pre_exec(
+            iteration, code, variables, history, input_args, *, raw_code=""
+        ):
             call_order.append("pre_execution")
             await asyncio.sleep(0)
             return PreExecutionOutput(code=code)
 
         async def async_post_exec(
-            iteration, code, result, variables, history, input_args
+            iteration, code, result, variables, history, input_args, *, raw_code=""
         ):
             call_order.append("post_execution")
             await asyncio.sleep(0)
@@ -214,7 +220,9 @@ class TestAsyncHooks:
         def sync_pre_iter(iteration, variables, history, input_args):
             return PreIterationOutput(extra_vars={"sync": True})
 
-        async def async_pre_exec(iteration, code, variables, history, input_args):
+        async def async_pre_exec(
+            iteration, code, variables, history, input_args, *, raw_code=""
+        ):
             await asyncio.sleep(0)
             return PreExecutionOutput(code=f"# async\n{code}")
 
