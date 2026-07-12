@@ -489,7 +489,7 @@ class TestWrappedAexecuteIteration:
         )
 
         await mock_predict_rlm_instance._aexecute_iteration(
-            MagicMock(), [], MagicMock(), 0, {}, ["answer"], ["answer"]
+            MagicMock(), [], MagicMock(), 0, {}, ["answer"]
         )
 
         hook.assert_called_once()
@@ -524,7 +524,7 @@ class TestWrappedAexecuteIteration:
         )
 
         await mock_predict_rlm_instance._aexecute_iteration(
-            MagicMock(), [], MagicMock(), 0, {}, ["answer"], ["answer"]
+            MagicMock(), [], MagicMock(), 0, {}, ["answer"]
         )
 
         assert "pre_iteration" in call_order
@@ -558,7 +558,7 @@ class TestWrappedAexecuteIteration:
         )
 
         await mock_predict_rlm_instance._aexecute_iteration(
-            MagicMock(), [], MagicMock(), 0, {}, ["answer"], ["answer"]
+            MagicMock(), [], MagicMock(), 0, {}, ["answer"]
         )
 
         assert captured.get("async_var") is True
