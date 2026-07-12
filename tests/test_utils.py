@@ -95,3 +95,11 @@ class TestStripCodeFences:
         code = "```python\nprint('hello')"
         result = _strip_code_fences(code)
         assert result == "print('hello')"
+
+    def test_fence_without_newline_after_language(self):
+        """Test fence marker without newline after language tag."""
+        # This should hit line 41 - early return when no separator
+        code = "```python"
+        result = _strip_code_fences(code)
+        # Should return the code as-is since there's no content after the fence
+        assert "```python" in result

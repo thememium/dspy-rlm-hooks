@@ -64,6 +64,7 @@ markers = ["asyncio: marks tests as async (pytest-asyncio)"]
 filterwarnings = [
   "ignore::DeprecationWarning:dspy.predict.avatar.signatures",
   "ignore::DeprecationWarning:dspy.teleprompt.avatar_optimizer",
+  "ignore::RuntimeWarning:unittest.mock",
 ]
 
 [tool.deptry]
