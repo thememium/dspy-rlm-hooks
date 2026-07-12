@@ -4,13 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from dspy_rlm_hooks import (
-    PostExecutionOutput,
-    PostIterationOutput,
-    PreExecutionOutput,
-    PreIterationOutput,
-    enable_rlm_hooks,
-)
+from dspy_rlm_hooks import (PostExecutionOutput, PostIterationOutput,
+                            PreExecutionOutput, PreIterationOutput,
+                            enable_rlm_hooks)
 
 
 class TestEndToEnd:
