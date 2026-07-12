@@ -250,6 +250,7 @@ def enable_predict_rlm_hooks(
         result = orig_forward(**kwargs)
         if rlm._hook_pre_execution:
             ctx: dict[str, Any] = getattr(rlm, "_hook_current_context", {})
+            raw_code = result.code  # Preserve original before stripping
             code = _strip_code_fences(result.code)
             pre_exec_out = rlm._hook_pre_execution(
                 ctx.get("iteration", 0),
@@ -257,11 +258,14 @@ def enable_predict_rlm_hooks(
                 ctx.get("variables", []),
                 ctx.get("history", []),
                 ctx.get("input_args", {}),
+                raw_code=raw_code,
             )
             if asyncio.iscoroutine(pre_exec_out):
                 pre_exec_out = _run_async(pre_exec_out)
             pre_exec_out = cast(PreExecutionOutput, pre_exec_out)
             result.code = pre_exec_out.code
+            # Store raw_code in context for post_execution_hook
+            rlm._hook_current_context = {**ctx, "raw_code": raw_code}
         return result
 
     rlm.generate_action.forward = _wrapped_forward
@@ -300,6 +304,7 @@ def enable_predict_rlm_hooks(
 
         # --- post-execution hook (mutation) ---
         if self._hook_post_execution:
+            raw_code = ctx.get("raw_code", code_arg)
             post_exec_out = self._hook_post_execution(
                 iteration,
                 code_arg,
@@ -307,6 +312,7 @@ def enable_predict_rlm_hooks(
                 variables,
                 history,
                 input_args,
+                raw_code=raw_code,
             )
             if asyncio.iscoroutine(post_exec_out):
                 post_exec_out = _run_async(post_exec_out)
