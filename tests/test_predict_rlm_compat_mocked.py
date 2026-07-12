@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -112,6 +113,19 @@ class TestIsPredictRLM:
         with patch.dict(sys.modules, {"predict_rlm": None}):
             result = _is_predict_rlm(None)
             assert result is False
+
+    def test_is_predict_rlm_true_for_predict_rlm_instance(self):
+        """Test returns True for a PredictRLM instance when predict_rlm is available."""
+        # Create a fake predict_rlm module with a PredictRLM class
+        fake_module = ModuleType("predict_rlm")
+        fake_PredictRLM = type("PredictRLM", (), {})
+        fake_module.PredictRLM = fake_PredictRLM
+
+        with patch.dict(sys.modules, {"predict_rlm": fake_module}):
+            # Create an instance of the fake PredictRLM
+            instance = fake_PredictRLM()
+            result = _is_predict_rlm(instance)
+            assert result is True
 
 
 # ---------------------------------------------------------------------------
