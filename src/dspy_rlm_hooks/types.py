@@ -104,6 +104,17 @@ class PreExecutionHook(Protocol):
     """Called after code generation, before execution.
 
     Receives the generated code and may rewrite it.
+
+    Args:
+        iteration: Current iteration index (0-based).
+        code: The code after markdown fence stripping. May be truncated
+            if the LLM output multiple code blocks.
+        variables: Current REPL variables.
+        history: REPL interaction history.
+        input_args: Original input arguments.
+        raw_code: The full, untruncated code as returned by the LLM,
+            before any fence stripping. Use this to access code blocks
+            that would otherwise be discarded by fence stripping.
     """
 
     def __call__(
@@ -113,6 +124,8 @@ class PreExecutionHook(Protocol):
         variables: list[Any],
         history: list[Any],
         input_args: dict[str, Any],
+        *,
+        raw_code: str = "",
     ) -> PreExecutionOutput | Awaitable[PreExecutionOutput]: ...
 
 
@@ -121,6 +134,17 @@ class PostExecutionHook(Protocol):
     """Called after code execution, before result processing.
 
     Receives the raw execution result and may transform or audit it.
+
+    Args:
+        iteration: Current iteration index (0-based).
+        code: The code that was executed (after fence stripping).
+        result: The raw execution result.
+        variables: Current REPL variables.
+        history: REPL interaction history.
+        input_args: Original input arguments.
+        raw_code: The full, untruncated code as returned by the LLM,
+            before any fence stripping. Use this to see what the LLM
+            originally generated, including any discarded code blocks.
     """
 
     def __call__(
@@ -131,6 +155,8 @@ class PostExecutionHook(Protocol):
         variables: list[Any],
         history: list[Any],
         input_args: dict[str, Any],
+        *,
+        raw_code: str = "",
     ) -> PostExecutionOutput | Awaitable[PostExecutionOutput]: ...
 
 
