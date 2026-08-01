@@ -43,6 +43,7 @@ Public API
 from __future__ import annotations
 
 from dspy_rlm_hooks.patcher import disable_rlm_hooks, enable_rlm_hooks
+from dspy_rlm_hooks.tracing import enable_rlm_hooks_with_tracing
 from dspy_rlm_hooks.types import (
     PostExecutionHook,
     PostExecutionOutput,
@@ -73,6 +74,7 @@ __all__ = [
     "PostIterationOutput",
     "RLMHook",
     "enable_rlm_hooks",
+    "enable_rlm_hooks_with_tracing",
     "disable_rlm_hooks",
 ]
 
