@@ -14,6 +14,7 @@ from dspy_rlm_hooks import (
     PreIterationOutput,
     enable_rlm_hooks_with_tracing,
 )
+from dspy_rlm_hooks.tracing import _ensure_type, _safe_serialize
 
 
 @pytest.fixture
@@ -433,3 +434,240 @@ class TestTracingImportError:
         ):
             with pytest.raises(ImportError, match="mlflow is required"):
                 enable_rlm_hooks_with_tracing(mock_rlm)
+
+
+class TestSafeSerialize:
+    """Tests for _safe_serialize helper."""
+
+    def test_none_passthrough(self):
+        """Test that None passes through unchanged."""
+        assert _safe_serialize(None) is None
+
+    def test_bool_passthrough(self):
+        """Test that booleans pass through unchanged."""
+        assert _safe_serialize(True) is True
+        assert _safe_serialize(False) is False
+
+    def test_int_passthrough(self):
+        """Test that integers pass through unchanged."""
+        assert _safe_serialize(42) == 42
+        assert _safe_serialize(0) == 0
+        assert _safe_serialize(-1) == -1
+
+    def test_float_passthrough(self):
+        """Test that floats pass through unchanged."""
+        assert _safe_serialize(3.14) == 3.14
+        assert _safe_serialize(0.0) == 0.0
+
+    def test_string_passthrough(self):
+        """Test that strings pass through unchanged."""
+        assert _safe_serialize("hello") == "hello"
+        assert _safe_serialize("") == ""
+
+    def test_dict_recursive(self):
+        """Test that dicts are serialized recursively."""
+        result = _safe_serialize({"key": "value", "num": 42})
+        assert result == {"key": "value", "num": 42}
+
+    def test_dict_with_nested_complex(self):
+        """Test that dicts with complex values use repr."""
+        result = _safe_serialize({"obj": object()})
+        assert "object" in result["obj"]
+
+    def test_list_recursive(self):
+        """Test that lists are serialized recursively."""
+        result = _safe_serialize([1, "two", None])
+        assert result == [1, "two", None]
+
+    def test_tuple_converted_to_list(self):
+        """Test that tuples are converted to lists."""
+        result = _safe_serialize((1, 2, 3))
+        assert result == [1, 2, 3]
+        assert isinstance(result, list)
+
+    def test_complex_object_uses_repr(self):
+        """Test that complex objects fall back to repr."""
+
+        class CustomObj:
+            def __repr__(self):
+                return "CustomObj()"
+
+        result = _safe_serialize(CustomObj())
+        assert result == "CustomObj()"
+
+    def test_nested_dict_and_list(self):
+        """Test deeply nested structures."""
+        data = {"a": [1, {"b": (2, 3)}]}
+        result = _safe_serialize(data)
+        assert result == {"a": [1, {"b": [2, 3]}]}
+
+
+class TestEnsureType:
+    """Tests for _ensure_type helper."""
+
+    def test_matching_type_returns_value(self):
+        """Test that a correctly-typed value passes through."""
+        value = PreIterationOutput(extra_vars={"x": 1})
+        result = _ensure_type(value, PreIterationOutput)
+        assert result is value
+
+    def test_mismatched_type_logs_warning_and_returns_value(self, caplog):
+        """Test that a mismatched type logs a warning and returns as-is."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="dspy_rlm_hooks.tracing"):
+            result = _ensure_type("not an output", PreIterationOutput)
+
+        assert result == "not an output"
+        assert "expected PreIterationOutput" in caplog.text
+
+    def test_none_with_non_none_type_logs_warning(self, caplog):
+        """Test that None passed to a non-None type logs warning."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="dspy_rlm_hooks.tracing"):
+            result = _ensure_type(None, PreExecutionOutput)
+
+        assert result is None
+        assert "expected PreExecutionOutput" in caplog.text
+
+
+class TestTracingAsyncPreIteration:
+    """Tests for async traced pre_iteration hooks."""
+
+    def test_async_pre_iteration_hook_returns_async_traced(
+        self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
+    ):
+        """Test that an async pre_iteration hook is wrapped with async_traced."""
+        mlflow_mod, mock_span = mock_mlflow
+
+        async def async_hook(iteration, variables, history, input_args):
+            return PreIterationOutput(extra_vars={"async": True})
+
+        enable_rlm_hooks_with_tracing(mock_rlm, pre_iteration_hook=async_hook)
+
+        action = MagicMock()
+        action.code = "print('hello')"
+        action.reasoning = "test"
+        mock_rlm.generate_action.return_value = action
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        mock_rlm._execute_iteration(
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
+        )
+
+        assert mock_span.name == "rlm_hook/pre_iteration/0"
+        outputs = mock_span.set_outputs.call_args[0][0]
+        assert outputs["extra_vars"]["async"] is True
+
+
+class TestTracingAsyncPreExecution:
+    """Tests for async traced pre_execution hooks."""
+
+    def test_async_pre_execution_hook_returns_async_traced(
+        self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
+    ):
+        """Test that an async pre_execution hook is wrapped with async_traced."""
+        mlflow_mod, mock_span = mock_mlflow
+
+        async def async_hook(iteration, code, variables, history, input_args):
+            return PreExecutionOutput(code=f"# async modified\n{code}")
+
+        enable_rlm_hooks_with_tracing(mock_rlm, pre_execution_hook=async_hook)
+
+        action = MagicMock()
+        action.code = "print('hello')"
+        action.reasoning = "test"
+        mock_rlm.generate_action.return_value = action
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        mock_rlm._execute_iteration(
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
+        )
+
+        assert mock_span.name == "rlm_hook/pre_execution/0"
+        outputs = mock_span.set_outputs.call_args[0][0]
+        assert "# async modified" in outputs["modified_code"]
+
+
+class TestTracingAsyncPostExecution:
+    """Tests for async traced post_execution hooks."""
+
+    def test_async_post_execution_hook_returns_async_traced(
+        self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
+    ):
+        """Test that an async post_execution hook is wrapped with async_traced."""
+        mlflow_mod, mock_span = mock_mlflow
+
+        async def async_hook(iteration, code, result, variables, history, input_args):
+            return PostExecutionOutput(result=f"async transformed: {result}")
+
+        enable_rlm_hooks_with_tracing(mock_rlm, post_execution_hook=async_hook)
+
+        action = MagicMock()
+        action.code = "print('hello')"
+        action.reasoning = "test"
+        mock_rlm.generate_action.return_value = action
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        mock_rlm._execute_iteration(
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
+        )
+
+        assert mock_span.name == "rlm_hook/post_execution/0"
+        outputs = mock_span.set_outputs.call_args[0][0]
+        assert "async transformed:" in outputs["final_result"]
+
+
+class TestTracingAsyncPostIteration:
+    """Tests for async traced post_iteration hooks."""
+
+    def test_async_post_iteration_hook_returns_async_traced(
+        self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
+    ):
+        """Test that an async post_iteration hook is wrapped with async_traced."""
+        mlflow_mod, mock_span = mock_mlflow
+
+        async def async_hook(iteration, pred, code, result, history):
+            return PostIterationOutput(history=history, stop=False)
+
+        enable_rlm_hooks_with_tracing(mock_rlm, post_iteration_hook=async_hook)
+
+        action = MagicMock()
+        action.code = "print('hello')"
+        action.reasoning = "test"
+        mock_rlm.generate_action.return_value = action
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        mock_rlm._execute_iteration(
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
+        )
+
+        assert mock_span.name == "rlm_hook/post_iteration/0"
+        outputs = mock_span.set_outputs.call_args[0][0]
+        assert outputs["stop"] is False
+
+    def test_async_post_iteration_with_stop(
+        self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
+    ):
+        """Test that async post_iteration hook with stop=True is recorded."""
+        mlflow_mod, mock_span = mock_mlflow
+
+        async def async_hook(iteration, pred, code, result, history):
+            return PostIterationOutput(history=history, stop=True)
+
+        enable_rlm_hooks_with_tracing(mock_rlm, post_iteration_hook=async_hook)
+
+        action = MagicMock()
+        action.code = "print('hello')"
+        action.reasoning = "test"
+        mock_rlm.generate_action.return_value = action
+        mock_rlm._process_execution_result.return_value = mock_history
+        mock_rlm._extract_fallback.return_value = MagicMock()
+
+        mock_rlm._execute_iteration(
+            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
+        )
+
+        outputs = mock_span.set_outputs.call_args[0][0]
+        assert outputs["stop"] is True
