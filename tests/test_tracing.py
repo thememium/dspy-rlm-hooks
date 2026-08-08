@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+import sys
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -12,9 +14,16 @@ from dspy_rlm_hooks import (
     PostIterationOutput,
     PreExecutionOutput,
     PreIterationOutput,
+    enable_rlm_hooks,
     enable_rlm_hooks_with_tracing,
 )
-from dspy_rlm_hooks.tracing import _ensure_type, _safe_serialize
+from dspy_rlm_hooks.tracing import (
+    _ensure_type,
+    _import_mlflow,
+    _is_mlflow_tracing_available,
+    _load_mlflow,
+    _safe_serialize,
+)
 
 
 @pytest.fixture
@@ -671,3 +680,96 @@ class TestTracingAsyncPostIteration:
 
         outputs = mock_span.set_outputs.call_args[0][0]
         assert outputs["stop"] is True
+
+
+class TestAutomaticTracing:
+    """Tests for runtime MLflow detection in the main public API."""
+
+    def test_enable_rlm_hooks_uses_tracing_when_mlflow_is_available(
+        self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
+    ):
+        _, mock_span = mock_mlflow
+
+        def hook(iteration, variables, history, input_args):
+            return PreIterationOutput(extra_vars={"traced": True})
+
+        with patch(
+            "dspy_rlm_hooks._is_mlflow_tracing_available",
+            return_value=True,
+        ):
+            enable_rlm_hooks(mock_rlm, pre_iteration_hook=hook)
+
+        action = MagicMock(code="print('hello')", reasoning="test")
+        mock_rlm.generate_action.return_value = action
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        mock_rlm._execute_iteration(
+            mock_repl,
+            mock_variables,
+            mock_history,
+            0,
+            {"question": "test"},
+            ["answer"],
+        )
+
+        assert mock_span.name == "rlm_hook/pre_iteration/0"
+        assert mock_repl.execute.call_args.kwargs["variables"]["traced"] is True
+
+    def test_enable_rlm_hooks_falls_back_when_mlflow_is_missing(self, mock_rlm):
+        def hook(iteration, variables, history, input_args):
+            return PreIterationOutput()
+
+        with patch(
+            "dspy_rlm_hooks._is_mlflow_tracing_available",
+            return_value=False,
+        ):
+            enable_rlm_hooks(mock_rlm, pre_iteration_hook=hook)
+
+        assert mock_rlm._hook_pre_iteration is hook
+
+    def test_detection_requires_mlflow_span_api(self):
+        mlflow_without_tracing = MagicMock(spec=[])
+        with patch(
+            "dspy_rlm_hooks.tracing._load_mlflow",
+            return_value=mlflow_without_tracing,
+        ):
+            assert _is_mlflow_tracing_available() is False
+
+    def test_detection_accepts_mlflow_span_api(self):
+        mlflow_with_tracing = MagicMock()
+        mlflow_with_tracing.start_span = MagicMock()
+        with patch(
+            "dspy_rlm_hooks.tracing._load_mlflow",
+            return_value=mlflow_with_tracing,
+        ):
+            assert _is_mlflow_tracing_available() is True
+
+    def test_explicit_import_rejects_mlflow_without_span_api(self):
+        mlflow_without_tracing = MagicMock(spec=[])
+        with (
+            patch(
+                "dspy_rlm_hooks.tracing._load_mlflow",
+                return_value=mlflow_without_tracing,
+            ),
+            pytest.raises(ImportError, match="mlflow>=2.14.0"),
+        ):
+            _import_mlflow()
+
+    def test_load_mlflow_returns_none_when_package_is_missing(self):
+        with patch.dict(sys.modules, {"mlflow": None}):
+            assert _load_mlflow() is None
+
+    def test_load_mlflow_preserves_transitive_import_errors(self):
+        error = ModuleNotFoundError("missing dependency", name="mlflow_dependency")
+        with (
+            patch("builtins.__import__", side_effect=error),
+            pytest.raises(ModuleNotFoundError, match="missing dependency"),
+        ):
+            _load_mlflow()
+
+    def test_public_enable_signature_matches_non_tracing_implementation(self):
+        from dspy_rlm_hooks.patcher import enable_rlm_hooks as non_tracing_enable
+
+        assert inspect.signature(enable_rlm_hooks) == inspect.signature(
+            non_tracing_enable
+        )

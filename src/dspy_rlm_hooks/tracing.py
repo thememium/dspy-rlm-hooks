@@ -1,9 +1,10 @@
 """MLflow tracing wrapper for DSPy RLM lifecycle hooks.
 
-This module provides :func:`enable_rlm_hooks_with_tracing`, a drop-in
-replacement for :func:`enable_rlm_hooks` that wraps each hook with MLflow
-span tracking.  Hook inputs and outputs are recorded as span attributes,
-making them visible in the MLflow UI alongside DSPy's native tracing.
+The public :func:`dspy_rlm_hooks.enable_rlm_hooks` function automatically
+uses these wrappers when MLflow is available.  The explicit
+:func:`enable_rlm_hooks_with_tracing` entry point is retained for callers that
+want missing MLflow to raise an error.  Hook inputs and outputs are recorded
+on spans, making them visible alongside DSPy's native tracing.
 
 MLflow is an **optional** dependency — install with::
 
@@ -17,7 +18,7 @@ Example::
 
     import mlflow
     import dspy
-    from dspy_rlm_hooks import enable_rlm_hooks_with_tracing, PreIterationOutput
+    from dspy_rlm_hooks import enable_rlm_hooks, PreIterationOutput
 
     mlflow.dspy.autolog()  # enable DSPy-native tracing
 
@@ -26,7 +27,7 @@ Example::
     def inject_context(iteration, variables, history, input_args):
         return PreIterationOutput(extra_vars={"context": "some data"})
 
-    enable_rlm_hooks_with_tracing(rlm, pre_iteration_hook=inject_context)
+    enable_rlm_hooks(rlm, pre_iteration_hook=inject_context)
     result = rlm(question="What is 2 + 2?")
 """
 
@@ -36,7 +37,6 @@ import asyncio
 import logging
 from typing import Any
 
-from dspy_rlm_hooks.patcher import enable_rlm_hooks
 from dspy_rlm_hooks.types import (
     PostExecutionHook,
     PostExecutionOutput,
@@ -51,15 +51,40 @@ from dspy_rlm_hooks.types import (
 logger = logging.getLogger(__name__)
 
 
-def _import_mlflow():
-    """Import mlflow, raising a clear error if not installed."""
+def _load_mlflow() -> Any | None:
+    """Return the user's MLflow module, or ``None`` when it is not installed.
+
+    Only a genuinely missing top-level ``mlflow`` package is treated as an
+    optional-dependency miss.  Import failures from inside an installed MLflow
+    package are allowed to surface instead of silently disabling tracing.
+    """
     try:
         import mlflow
-    except ImportError as exc:
+    except ModuleNotFoundError as exc:
+        if exc.name == "mlflow":
+            return None
+        raise
+    return mlflow
+
+
+def _import_mlflow() -> Any:
+    """Import MLflow, raising a clear error if it is not installed."""
+    mlflow = _load_mlflow()
+    if mlflow is None:
         raise ImportError(
             "mlflow is required for tracing. Install it with: pip install mlflow"
-        ) from exc
+        )
+    if not callable(getattr(mlflow, "start_span", None)):
+        raise ImportError(
+            "MLflow tracing requires mlflow>=2.14.0 with the start_span API."
+        )
     return mlflow
+
+
+def _is_mlflow_tracing_available() -> bool:
+    """Return whether MLflow's span API is available in the user environment."""
+    mlflow = _load_mlflow()
+    return mlflow is not None and callable(getattr(mlflow, "start_span", None))
 
 
 def _safe_serialize(value: Any) -> Any:
@@ -353,6 +378,10 @@ def enable_rlm_hooks_with_tracing(
     """
     # Validate MLflow is available before patching
     _import_mlflow()
+
+    # Import the non-dispatching patcher here to avoid routing back through
+    # automatic MLflow detection.
+    from dspy_rlm_hooks.patcher import enable_rlm_hooks
 
     enable_rlm_hooks(
         rlm,
