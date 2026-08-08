@@ -266,8 +266,12 @@ When MLflow is available, every configured lifecycle hook gets a stable span
 name, `rlm_hook/<hook_name>`, for every iteration. The iteration number remains
 available in the span inputs. Python source in the trace's `python_code`, `code`,
 `original_code`, and `modified_code` fields is formatted as fenced Python
-Markdown for readable rendering. With DSPy autologging enabled, those spans
-nest under DSPy's active trace. Without MLflow, the same `enable_rlm_hooks`
+Markdown for readable rendering. Every interpreter call also creates an
+`rlm/execute_code` span after action generation and any `pre_execution` hook.
+Its `code` input is the final source that actually ran, including persistent
+Python injected by `pre_iteration`, and its `input_args` include injected
+variables. With DSPy autologging enabled, these spans nest under DSPy's active
+trace. Without MLflow, the same `enable_rlm_hooks`
 call continues to run as regular untraced hooks. The older
 `enable_rlm_hooks_with_tracing` function remains available for callers that
 explicitly want an `ImportError` when MLflow is missing.
