@@ -19,6 +19,7 @@ from dspy_rlm_hooks import (
 )
 from dspy_rlm_hooks.tracing import (
     _ensure_type,
+    _format_python_code,
     _import_mlflow,
     _is_mlflow_tracing_available,
     _load_mlflow,
@@ -108,7 +109,7 @@ class TestTracingPreIteration:
         mock_span.set_outputs.assert_called_once()
         outputs = mock_span.set_outputs.call_args[0][0]
         assert outputs["extra_vars"]["context"] == "test"
-        assert outputs["python_code"] == "import math"
+        assert outputs["python_code"] == "```python\nimport math\n```"
 
     def test_pre_iteration_still_injects_variables(
         self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
@@ -186,10 +187,12 @@ class TestTracingPreExecution:
         )
 
         inputs = mock_span.set_inputs.call_args[0][0]
-        assert inputs["original_code"] == "print('hello')"
+        assert inputs["original_code"] == "```python\nprint('hello')\n```"
 
         outputs = mock_span.set_outputs.call_args[0][0]
-        assert "# modified" in outputs["modified_code"]
+        assert outputs["modified_code"] == (
+            "```python\n# modified\nprint('hello')\n```"
+        )
 
     def test_pre_execution_still_rewrites_code(
         self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
@@ -213,7 +216,7 @@ class TestTracingPreExecution:
         )
 
         call_args = mock_repl.execute.call_args
-        assert "# rewritten" in call_args.args[0]
+        assert call_args.args[0] == "# rewritten\nprint('hello')"
 
 
 class TestTracingPostExecution:
@@ -264,7 +267,7 @@ class TestTracingPostExecution:
         )
 
         inputs = mock_span.set_inputs.call_args[0][0]
-        assert inputs["code"] == "print('hello')"
+        assert inputs["code"] == "```python\nprint('hello')\n```"
 
         outputs = mock_span.set_outputs.call_args[0][0]
         assert "transformed:" in outputs["final_result"]
@@ -317,6 +320,9 @@ class TestTracingPostIteration:
         mock_rlm._execute_iteration(
             mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
+
+        inputs = mock_span.set_inputs.call_args[0][0]
+        assert inputs["code"] == "```python\nprint('hello')\n```"
 
         outputs = mock_span.set_outputs.call_args[0][0]
         assert outputs["stop"] is True
@@ -451,6 +457,31 @@ class TestTracingImportError:
                 enable_rlm_hooks_with_tracing(mock_rlm)
 
 
+class TestFormatPythonCode:
+    """Tests for Python code formatting in MLflow traces."""
+
+    def test_wraps_code_in_python_fence(self):
+        assert _format_python_code("print('hello')") == (
+            "```python\nprint('hello')\n```"
+        )
+
+    def test_formats_empty_code(self):
+        assert _format_python_code("") == "```python\n\n```"
+
+    def test_preserves_trailing_newline(self):
+        assert _format_python_code("print('hello')\n") == (
+            "```python\nprint('hello')\n```"
+        )
+
+    def test_embedded_fence_uses_longer_outer_fence(self):
+        code = 'message = """\n```python\nnested()\n```\n"""'
+        assert _format_python_code(code) == f"````python\n{code}\n````"
+
+    def test_handles_arbitrary_backtick_runs(self):
+        code = "value = '`````'"
+        assert _format_python_code(code) == f"``````python\n{code}\n``````"
+
+
 class TestSafeSerialize:
     """Tests for _safe_serialize helper."""
 
@@ -574,6 +605,7 @@ class TestTracingAsyncPreIteration:
         assert mock_span.name == "rlm_hook/pre_iteration"
         outputs = mock_span.set_outputs.call_args[0][0]
         assert outputs["extra_vars"]["async"] is True
+        assert outputs["python_code"] == "```python\n\n```"
 
 
 class TestTracingAsyncPreExecution:
@@ -601,8 +633,12 @@ class TestTracingAsyncPreExecution:
         )
 
         assert mock_span.name == "rlm_hook/pre_execution"
+        inputs = mock_span.set_inputs.call_args[0][0]
+        assert inputs["original_code"] == "```python\nprint('hello')\n```"
         outputs = mock_span.set_outputs.call_args[0][0]
-        assert "# async modified" in outputs["modified_code"]
+        assert outputs["modified_code"] == (
+            "```python\n# async modified\nprint('hello')\n```"
+        )
 
 
 class TestTracingAsyncPostExecution:
@@ -630,6 +666,8 @@ class TestTracingAsyncPostExecution:
         )
 
         assert mock_span.name == "rlm_hook/post_execution"
+        inputs = mock_span.set_inputs.call_args[0][0]
+        assert inputs["code"] == "```python\nprint('hello')\n```"
         outputs = mock_span.set_outputs.call_args[0][0]
         assert "async transformed:" in outputs["final_result"]
 
@@ -659,6 +697,8 @@ class TestTracingAsyncPostIteration:
         )
 
         assert mock_span.name == "rlm_hook/post_iteration"
+        inputs = mock_span.set_inputs.call_args[0][0]
+        assert inputs["code"] == "```python\nprint('hello')\n```"
         outputs = mock_span.set_outputs.call_args[0][0]
         assert outputs["stop"] is False
 

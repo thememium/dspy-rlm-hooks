@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from dspy_rlm_hooks.types import (
@@ -87,6 +88,20 @@ def _is_mlflow_tracing_available() -> bool:
     return mlflow is not None and callable(getattr(mlflow, "start_span", None))
 
 
+def _format_python_code(code: str) -> str:
+    """Wrap Python source for Markdown rendering in an MLflow trace.
+
+    The fence is lengthened when the source contains backtick runs so embedded
+    Markdown fences cannot terminate the outer Python block.
+    """
+    longest_run = max(
+        (len(match.group()) for match in re.finditer(r"`+", code)), default=0
+    )
+    fence = "`" * max(3, longest_run + 1)
+    body = code if code.endswith("\n") else f"{code}\n"
+    return f"{fence}python\n{body}{fence}"
+
+
 def _safe_serialize(value: Any) -> Any:
     """Convert a value to something MLflow span attributes can store."""
     if value is None or isinstance(value, (bool, int, float, str)):
@@ -123,7 +138,7 @@ def _make_traced_pre_iteration(hook: PreIterationHook) -> PreIterationHook:
             span.set_outputs(
                 {
                     "extra_vars": _safe_serialize(result.extra_vars),
-                    "python_code": result.python_code,
+                    "python_code": _format_python_code(result.python_code),
                 }
             )
             return result
@@ -149,7 +164,7 @@ def _make_traced_pre_iteration(hook: PreIterationHook) -> PreIterationHook:
             span.set_outputs(
                 {
                     "extra_vars": _safe_serialize(result.extra_vars),
-                    "python_code": result.python_code,
+                    "python_code": _format_python_code(result.python_code),
                 }
             )
             return result
@@ -175,14 +190,14 @@ def _make_traced_pre_execution(hook: PreExecutionHook) -> PreExecutionHook:
             span.set_inputs(
                 {
                     "iteration": iteration,
-                    "original_code": code,
+                    "original_code": _format_python_code(code),
                 }
             )
             result = hook(iteration, code, variables, history, input_args)
             if asyncio.iscoroutine(result):
                 result = asyncio.get_event_loop().run_until_complete(result)
             result = _ensure_type(result, PreExecutionOutput)
-            span.set_outputs({"modified_code": result.code})
+            span.set_outputs({"modified_code": _format_python_code(result.code)})
             return result
 
     async def async_traced(
@@ -197,14 +212,14 @@ def _make_traced_pre_execution(hook: PreExecutionHook) -> PreExecutionHook:
             span.set_inputs(
                 {
                     "iteration": iteration,
-                    "original_code": code,
+                    "original_code": _format_python_code(code),
                 }
             )
             result = hook(iteration, code, variables, history, input_args)
             if asyncio.iscoroutine(result):
                 result = await result
             result = _ensure_type(result, PreExecutionOutput)
-            span.set_outputs({"modified_code": result.code})
+            span.set_outputs({"modified_code": _format_python_code(result.code)})
             return result
 
     if asyncio.iscoroutinefunction(hook):
@@ -228,7 +243,7 @@ def _make_traced_post_execution(hook: PostExecutionHook) -> PostExecutionHook:
             span.set_inputs(
                 {
                     "iteration": iteration,
-                    "code": code,
+                    "code": _format_python_code(code),
                     "original_result": _safe_serialize(result),
                 }
             )
@@ -252,7 +267,7 @@ def _make_traced_post_execution(hook: PostExecutionHook) -> PostExecutionHook:
             span.set_inputs(
                 {
                     "iteration": iteration,
-                    "code": code,
+                    "code": _format_python_code(code),
                     "original_result": _safe_serialize(result),
                 }
             )
@@ -283,7 +298,7 @@ def _make_traced_post_iteration(hook: PostIterationHook) -> PostIterationHook:
             span.set_inputs(
                 {
                     "iteration": iteration,
-                    "code": code,
+                    "code": _format_python_code(code),
                     "result": _safe_serialize(result),
                 }
             )
@@ -306,7 +321,7 @@ def _make_traced_post_iteration(hook: PostIterationHook) -> PostIterationHook:
             span.set_inputs(
                 {
                     "iteration": iteration,
-                    "code": code,
+                    "code": _format_python_code(code),
                     "result": _safe_serialize(result),
                 }
             )
