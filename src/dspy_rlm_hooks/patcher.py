@@ -31,7 +31,12 @@ from dspy_rlm_hooks.types import (
     PreIterationHook,
     PreIterationOutput,
 )
-from dspy_rlm_hooks.utils import _assemble_execution_code, _strip_code_fences
+from dspy_rlm_hooks.utils import (
+    _assemble_execution_code,
+    _prepend_python_code,
+    _strip_code_fences,
+    _with_prompt_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +104,8 @@ def _execute_iteration(
         pre_iteration → generate_action → pre_execution → execute → post_execution → post_iteration
     """
     # --- pre-iteration hook ---
+    iteration_python_code = ""
+    prompt_context = ""
     if self._hook_pre_iteration:
         pre_iter_out = self._hook_pre_iteration(
             iteration, variables, history, input_args
@@ -107,12 +114,15 @@ def _execute_iteration(
             pre_iter_out = _run_async(pre_iter_out)
         pre_iter_out = cast(PreIterationOutput, pre_iter_out)
         input_args = {**input_args, **pre_iter_out.extra_vars}
-        if pre_iter_out.python_code:
-            current_globals = getattr(repl, "repl_globals", "") or ""
-            repl.repl_globals = current_globals + "\n" + pre_iter_out.python_code
+        iteration_python_code = pre_iter_out.python_code
+        prompt_context = pre_iter_out.prompt_context
+        if pre_iter_out.persistent_python_code is not None:
+            repl.repl_globals = pre_iter_out.persistent_python_code
 
     # --- action generation ---
-    variables_info = [variable.format() for variable in variables]
+    variables_info = _with_prompt_context(
+        [variable.format() for variable in variables], prompt_context
+    )
     action = self.generate_action(
         variables_info=variables_info,
         repl_history=history,
@@ -149,6 +159,7 @@ def _execute_iteration(
         code = pre_exec_out.code
 
     # --- execute ---
+    code = _prepend_python_code(code, iteration_python_code)
     result = self._execute_code(repl, code, input_args)
 
     # --- post-execution hook ---
@@ -197,6 +208,8 @@ async def _aexecute_iteration(
     and ``generate_action.acall``.
     """
     # --- pre-iteration hook ---
+    iteration_python_code = ""
+    prompt_context = ""
     if self._hook_pre_iteration:
         pre_iter_out = self._hook_pre_iteration(
             iteration, variables, history, input_args
@@ -205,12 +218,15 @@ async def _aexecute_iteration(
             pre_iter_out = await pre_iter_out
         pre_iter_out = cast(PreIterationOutput, pre_iter_out)
         input_args = {**input_args, **pre_iter_out.extra_vars}
-        if pre_iter_out.python_code:
-            current_globals = getattr(repl, "repl_globals", "") or ""
-            repl.repl_globals = current_globals + "\n" + pre_iter_out.python_code
+        iteration_python_code = pre_iter_out.python_code
+        prompt_context = pre_iter_out.prompt_context
+        if pre_iter_out.persistent_python_code is not None:
+            repl.repl_globals = pre_iter_out.persistent_python_code
 
     # --- action generation ---
-    variables_info = [variable.format() for variable in variables]
+    variables_info = _with_prompt_context(
+        [variable.format() for variable in variables], prompt_context
+    )
     pred = await self.generate_action.acall(
         variables_info=variables_info,
         repl_history=history,
@@ -247,6 +263,7 @@ async def _aexecute_iteration(
         code = pre_exec_out.code
 
     # --- execute ---
+    code = _prepend_python_code(code, iteration_python_code)
     result = self._execute_code(repl, code, input_args)
 
     # --- post-execution hook ---
@@ -309,9 +326,9 @@ def enable_rlm_hooks(
             ``_execute_iteration``, ``_aexecute_iteration``,
             ``_process_execution_result``, ``generate_action``/``generate_action.acall``,
             ``max_iterations``, and ``verbose``.
-        pre_iteration_hook: Called before action generation.  May inject
-            variables via :attr:`PreIterationOutput.extra_vars` or prepend
-            persistent code via :attr:`PreIterationOutput.python_code`.
+        pre_iteration_hook: Called before action generation. May inject
+            interpreter variables, current or persistent Python preludes, and
+            iteration-local action-generation context.
         pre_execution_hook: Called after code is generated, before execution.
             May rewrite the generated ``code`` string.
         post_execution_hook: Called after code executes, before the result is

@@ -116,6 +116,22 @@ def _safe_serialize(value: Any) -> Any:
     return repr(value)
 
 
+def _pre_iteration_outputs(result: PreIterationOutput) -> dict[str, Any]:
+    """Serialize only values explicitly supplied by a pre-iteration hook."""
+    outputs: dict[str, Any] = {
+        "extra_vars": _safe_serialize(result.extra_vars),
+    }
+    if result.python_code:
+        outputs["python_code"] = _format_python_code(result.python_code)
+    if result.persistent_python_code is not None:
+        outputs["persistent_python_code"] = _format_python_code(
+            result.persistent_python_code
+        )
+    if result.prompt_context:
+        outputs["prompt_context"] = result.prompt_context
+    return outputs
+
+
 def _make_traced_pre_iteration(hook: PreIterationHook) -> PreIterationHook:
     """Wrap a pre_iteration hook with MLflow span tracking."""
 
@@ -137,12 +153,7 @@ def _make_traced_pre_iteration(hook: PreIterationHook) -> PreIterationHook:
             if asyncio.iscoroutine(result):
                 result = asyncio.get_event_loop().run_until_complete(result)
             result = _ensure_type(result, PreIterationOutput)
-            span.set_outputs(
-                {
-                    "extra_vars": _safe_serialize(result.extra_vars),
-                    "python_code": _format_python_code(result.python_code),
-                }
-            )
+            span.set_outputs(_pre_iteration_outputs(result))
             return result
 
     async def async_traced(
@@ -163,12 +174,7 @@ def _make_traced_pre_iteration(hook: PreIterationHook) -> PreIterationHook:
             if asyncio.iscoroutine(result):
                 result = await result
             result = _ensure_type(result, PreIterationOutput)
-            span.set_outputs(
-                {
-                    "extra_vars": _safe_serialize(result.extra_vars),
-                    "python_code": _format_python_code(result.python_code),
-                }
-            )
+            span.set_outputs(_pre_iteration_outputs(result))
             return result
 
     # Return async version if the original hook is async
@@ -354,9 +360,9 @@ def _ensure_type(value: Any, expected_type: type) -> Any:
 def _make_traced_execute_code(original_execute_code: Any) -> Any:
     """Trace the final code and variables passed to the RLM interpreter.
 
-    ``pre_iteration`` hooks persist Python in ``repl.repl_globals`` and
-    ``pre_execution`` hooks can rewrite the generated action.  Assemble those
-    sources exactly as the patched RLM does so the span shows what actually
+    ``pre_iteration`` hooks can provide persistent and iteration-local Python,
+    while ``pre_execution`` hooks can rewrite the generated action. Assemble
+    those sources exactly as the patched RLM does so the span shows what actually
     runs, while delegating execution unchanged to ``original_execute_code``.
     """
 
