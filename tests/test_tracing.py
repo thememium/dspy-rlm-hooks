@@ -23,6 +23,7 @@ from dspy_rlm_hooks.tracing import (
     _import_mlflow,
     _is_mlflow_tracing_available,
     _load_mlflow,
+    _pre_iteration_outputs,
     _safe_serialize,
 )
 
@@ -93,7 +94,9 @@ class TestTracingPreIteration:
         def inject_hook(iteration, variables, history, input_args):
             return PreIterationOutput(
                 extra_vars={"context": "test"},
-                python_code="import math",
+                python_code="current = True",
+                persistent_python_code="import math",
+                prompt_context="Check the calculation.",
             )
 
         enable_rlm_hooks_with_tracing(mock_rlm, pre_iteration_hook=inject_hook)
@@ -118,7 +121,9 @@ class TestTracingPreIteration:
         mock_span.set_outputs.assert_called_once()
         outputs = mock_span.set_outputs.call_args[0][0]
         assert outputs["extra_vars"]["context"] == "test"
-        assert outputs["python_code"] == "```python\nimport math\n```"
+        assert outputs["python_code"] == "```python\ncurrent = True\n```"
+        assert outputs["persistent_python_code"] == "```python\nimport math\n```"
+        assert outputs["prompt_context"] == "Check the calculation."
 
     def test_pre_iteration_still_injects_variables(
         self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
@@ -146,6 +151,9 @@ class TestTracingPreIteration:
         call_args = mock_repl.execute.call_args
         assert call_args.kwargs["variables"]["debug"] is True
         assert call_args.kwargs["variables"]["count"] == 42
+
+        outputs = mock_span.set_outputs.call_args[0][0]
+        assert outputs == {"extra_vars": {"debug": True, "count": 42}}
 
 
 class TestTracingPreExecution:
@@ -461,7 +469,9 @@ class TestTracingExecuteCode:
         def inject_hook(iteration, variables, history, input_args):
             return PreIterationOutput(
                 extra_vars={"injected": "value"},
-                python_code="seed = 7",
+                python_code="CURRENT = True",
+                persistent_python_code="seed = 7",
+                prompt_context="Use the seeded value.",
             )
 
         def rewrite_hook(iteration, code, variables, history, input_args):
@@ -487,7 +497,7 @@ class TestTracingExecuteCode:
             ["answer"],
         )
 
-        executed_code = "\nseed = 7\n# rewritten\nprint(seed)"
+        executed_code = "seed = 7\nCURRENT = True\n# rewritten\nprint(seed)"
         execute_span = self._execute_span(mlflow_mod)
         execute_inputs = execute_span.set_inputs.call_args.args[0]
         assert execute_inputs == {
@@ -573,6 +583,21 @@ class TestTracingImportError:
         ):
             with pytest.raises(ImportError, match="mlflow is required"):
                 enable_rlm_hooks_with_tracing(mock_rlm)
+
+
+class TestPreIterationOutputs:
+    """Tests for concise pre-iteration trace outputs."""
+
+    def test_omits_unset_optional_fields(self):
+        outputs = _pre_iteration_outputs(PreIterationOutput())
+
+        assert outputs == {"extra_vars": {}}
+
+    def test_preserves_explicit_persistent_clear(self):
+        outputs = _pre_iteration_outputs(PreIterationOutput(persistent_python_code=""))
+
+        assert "python_code" not in outputs
+        assert outputs["persistent_python_code"] == "```python\n\n```"
 
 
 class TestFormatPythonCode:
@@ -722,8 +747,7 @@ class TestTracingAsyncPreIteration:
 
         assert mock_span.name == "rlm_hook/pre_iteration"
         outputs = mock_span.set_outputs.call_args[0][0]
-        assert outputs["extra_vars"]["async"] is True
-        assert outputs["python_code"] == "```python\n\n```"
+        assert outputs == {"extra_vars": {"async": True}}
 
 
 class TestTracingAsyncPreExecution:

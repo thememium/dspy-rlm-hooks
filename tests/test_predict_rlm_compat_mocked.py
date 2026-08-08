@@ -43,6 +43,9 @@ def mock_predict_rlm_instance():
     mock.generate_action.forward = MagicMock(
         return_value=MagicMock(code="generated code", reasoning="thinking"),
     )
+    mock.generate_action.aforward = AsyncMock(
+        return_value=MagicMock(code="generated async code", reasoning="thinking"),
+    )
     mock.max_iterations = 10
     mock.verbose = False
     return mock
@@ -169,6 +172,7 @@ class TestEnablePredictRLMHooks:
         orig_exec = mock_predict_rlm_instance._execute_iteration
         orig_aexec = mock_predict_rlm_instance._aexecute_iteration
         orig_forward = mock_predict_rlm_instance.generate_action.forward
+        orig_aforward = mock_predict_rlm_instance.generate_action.aforward
         orig_process = mock_predict_rlm_instance._process_execution_result
 
         enable_predict_rlm_hooks(mock_predict_rlm_instance)
@@ -177,6 +181,7 @@ class TestEnablePredictRLMHooks:
         assert originals["_execute_iteration"] is orig_exec
         assert originals["_aexecute_iteration"] is orig_aexec
         assert originals["generate_action_forward"] is orig_forward
+        assert originals["generate_action_aforward"] is orig_aforward
         assert originals["_process_execution_result"] is orig_process
 
     def test_enable_wraps_methods(self, mock_predict_rlm_instance):
@@ -184,12 +189,14 @@ class TestEnablePredictRLMHooks:
         orig_exec = mock_predict_rlm_instance._execute_iteration
         orig_aexec = mock_predict_rlm_instance._aexecute_iteration
         orig_forward = mock_predict_rlm_instance.generate_action.forward
+        orig_aforward = mock_predict_rlm_instance.generate_action.aforward
 
         enable_predict_rlm_hooks(mock_predict_rlm_instance)
 
         assert mock_predict_rlm_instance._execute_iteration is not orig_exec
         assert mock_predict_rlm_instance._aexecute_iteration is not orig_aexec
         assert mock_predict_rlm_instance.generate_action.forward is not orig_forward
+        assert mock_predict_rlm_instance.generate_action.aforward is not orig_aforward
 
     def test_enable_with_no_hooks(self, mock_predict_rlm_instance):
         """Test enable with all hooks set to None."""
@@ -239,6 +246,7 @@ class TestDisablePredictRLMHooks:
         orig_exec = mock_predict_rlm_instance._execute_iteration
         orig_aexec = mock_predict_rlm_instance._aexecute_iteration
         orig_forward = mock_predict_rlm_instance.generate_action.forward
+        orig_aforward = mock_predict_rlm_instance.generate_action.aforward
         orig_process = mock_predict_rlm_instance._process_execution_result
 
         enable_predict_rlm_hooks(mock_predict_rlm_instance)
@@ -247,6 +255,7 @@ class TestDisablePredictRLMHooks:
         assert mock_predict_rlm_instance._execute_iteration is orig_exec
         assert mock_predict_rlm_instance._aexecute_iteration is orig_aexec
         assert mock_predict_rlm_instance.generate_action.forward is orig_forward
+        assert mock_predict_rlm_instance.generate_action.aforward is orig_aforward
         assert mock_predict_rlm_instance._process_execution_result is orig_process
 
     def test_disable_cleans_hook_attrs(self, mock_predict_rlm_instance):
@@ -355,11 +364,13 @@ class TestWrappedExecuteIteration:
         assert captured_args.get("debug") is True
         assert captured_args.get("count") == 42
 
-    def test_pre_iteration_hook_python_code(self, mock_predict_rlm_instance):
-        """Test that pre_iteration_hook python_code is stored in repl_globals."""
+    def test_pre_iteration_hook_python_code_is_iteration_local(
+        self, mock_predict_rlm_instance
+    ):
+        """Iteration-local code prefixes the action without entering globals."""
 
         def code_hook(iteration, variables, history, input_args):
-            return PreIterationOutput(python_code="import math")
+            return PreIterationOutput(python_code="LOCAL = True")
 
         enable_predict_rlm_hooks(
             mock_predict_rlm_instance,
@@ -368,12 +379,13 @@ class TestWrappedExecuteIteration:
 
         repl = MagicMock()
         repl.repl_globals = ""
-
         mock_predict_rlm_instance._execute_iteration(
             repl, [], MagicMock(), 0, {}, ["answer"]
         )
+        action = mock_predict_rlm_instance.generate_action.forward(variables_info=[])
 
-        assert "import math" in repl.repl_globals
+        assert action.code == "LOCAL = True\ngenerated code"
+        assert repl.repl_globals == ""
 
     def test_pre_iteration_hook_async(self, mock_predict_rlm_instance):
         """Test that async pre_iteration_hook is awaited."""
@@ -426,11 +438,13 @@ class TestWrappedExecuteIteration:
 
         assert result == "stopped_result"
 
-    def test_pre_iteration_hook_with_repl_globals_none(self, mock_predict_rlm_instance):
-        """Test pre_iteration_hook when repl.repl_globals is None."""
+    def test_persistent_python_code_replaces_none_globals(
+        self, mock_predict_rlm_instance
+    ):
+        """Explicit persistent code replaces the current prelude exactly."""
 
         def code_hook(iteration, variables, history, input_args):
-            return PreIterationOutput(python_code="import os")
+            return PreIterationOutput(persistent_python_code="import os")
 
         enable_predict_rlm_hooks(
             mock_predict_rlm_instance,
@@ -438,11 +452,7 @@ class TestWrappedExecuteIteration:
         )
 
         repl = MagicMock()
-        repl.repl_globals = None  # Not empty string, but None
-        # getattr(repl, "repl_globals", "") or "" should handle None
-        if hasattr(repl, "repl_globals"):
-            repl.repl_globals = None
-
+        repl.repl_globals = None
         mock_predict_rlm_instance._execute_iteration(
             repl=repl,
             variables=[],
@@ -451,8 +461,10 @@ class TestWrappedExecuteIteration:
             input_args={},
             output_field_names=["answer"],
         )
+        action = mock_predict_rlm_instance.generate_action.forward(variables_info=[])
 
-        assert repl.repl_globals is not None and "import os" in repl.repl_globals
+        assert repl.repl_globals == "import os"
+        assert action.code == "import os\ngenerated code"
 
 
 # ---------------------------------------------------------------------------
@@ -565,10 +577,10 @@ class TestWrappedAexecuteIteration:
 
     @pytest.mark.asyncio
     async def test_async_pre_iteration_python_code(self, mock_predict_rlm_instance):
-        """Test that python_code is injected in async path."""
+        """Async action generation receives only the current iteration's code."""
 
         def code_hook(iteration, variables, history, input_args):
-            return PreIterationOutput(python_code="import os")
+            return PreIterationOutput(python_code="ASYNC_LOCAL = True")
 
         async def mock_aexecute(
             self,
@@ -583,7 +595,6 @@ class TestWrappedAexecuteIteration:
             return "result"
 
         mock_predict_rlm_instance._aexecute_iteration = mock_aexecute
-
         enable_predict_rlm_hooks(
             mock_predict_rlm_instance,
             pre_iteration_hook=code_hook,
@@ -591,12 +602,15 @@ class TestWrappedAexecuteIteration:
 
         repl = MagicMock()
         repl.repl_globals = ""
-
         await mock_predict_rlm_instance._aexecute_iteration(  # ty: ignore[missing-argument]
             repl, [], MagicMock(), 0, {}, ["answer"]
         )
+        action = await mock_predict_rlm_instance.generate_action.aforward(
+            variables_info=[]
+        )
 
-        assert repl.repl_globals is not None and "import os" in repl.repl_globals
+        assert action.code == "ASYNC_LOCAL = True\ngenerated async code"
+        assert repl.repl_globals == ""
 
     @pytest.mark.asyncio
     async def test_async_stop_iteration(self, mock_predict_rlm_instance):
@@ -777,6 +791,90 @@ class TestWrappedForward:
         mock_predict_rlm_instance.generate_action.forward()
 
         assert len(captured_args) == 1
+
+    def test_context_and_iteration_code_do_not_accumulate(
+        self, mock_predict_rlm_instance
+    ):
+        original_forward = MagicMock(
+            side_effect=[
+                MagicMock(code="generated_0()", reasoning="test"),
+                MagicMock(code="generated_1()", reasoning="test"),
+            ]
+        )
+        mock_predict_rlm_instance.generate_action.forward = original_forward
+        enable_predict_rlm_hooks(mock_predict_rlm_instance)
+
+        repl = MagicMock()
+        repl.repl_globals = "PERSISTENT = True"
+        variables_info = ["Variable: question"]
+        mock_predict_rlm_instance._hook_current_context = {
+            "repl": repl,
+            "python_code": "LOCAL_0 = True",
+            "prompt_context": "Strategy zero",
+        }
+        first = mock_predict_rlm_instance.generate_action.forward(
+            variables_info=variables_info
+        )
+
+        mock_predict_rlm_instance._hook_current_context = {
+            "repl": repl,
+            "python_code": "LOCAL_1 = True",
+            "prompt_context": "",
+        }
+        second = mock_predict_rlm_instance.generate_action.forward(
+            variables_info=variables_info
+        )
+
+        assert first.code == ("PERSISTENT = True\nLOCAL_0 = True\ngenerated_0()")
+        assert second.code == ("PERSISTENT = True\nLOCAL_1 = True\ngenerated_1()")
+        assert "LOCAL_0" not in second.code
+        assert variables_info == ["Variable: question"]
+        first_info = original_forward.call_args_list[0].kwargs["variables_info"]
+        second_info = original_forward.call_args_list[1].kwargs["variables_info"]
+        assert "Strategy zero" in first_info[-1]
+        assert all("Strategy zero" not in item for item in second_info)
+        assert "Strategy zero" not in first.code
+
+
+class TestWrappedAforward:
+    @pytest.mark.asyncio
+    async def test_async_context_pre_execution_and_code_assembly(
+        self, mock_predict_rlm_instance
+    ):
+        original_aforward = AsyncMock(
+            return_value=MagicMock(code="```python\ngenerated()\n```", reasoning="test")
+        )
+        mock_predict_rlm_instance.generate_action.aforward = original_aforward
+
+        async def rewrite_hook(iteration, code, variables, history, input_args):
+            await asyncio.sleep(0)
+            return PreExecutionOutput(code=f"# async rewritten\n{code}")
+
+        enable_predict_rlm_hooks(
+            mock_predict_rlm_instance,
+            pre_execution_hook=rewrite_hook,
+        )
+        repl = MagicMock()
+        repl.repl_globals = "PERSISTENT = True"
+        mock_predict_rlm_instance._hook_current_context = {
+            "iteration": 2,
+            "variables": [],
+            "history": [],
+            "input_args": {},
+            "repl": repl,
+            "python_code": "ASYNC_LOCAL = True",
+            "prompt_context": "Use async strategy.",
+        }
+
+        action = await mock_predict_rlm_instance.generate_action.aforward(
+            variables_info=["Variable: question"]
+        )
+
+        assert action.code == (
+            "PERSISTENT = True\nASYNC_LOCAL = True\n# async rewritten\ngenerated()"
+        )
+        action_info = original_aforward.call_args.kwargs["variables_info"]
+        assert "Use async strategy." in action_info[-1]
 
 
 # ---------------------------------------------------------------------------

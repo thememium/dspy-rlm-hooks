@@ -245,28 +245,102 @@ class TestHookEdgeCases:
         call_args = mock_rlm._process_execution_result.call_args
         assert "[Error]" in str(call_args.args[2])
 
-    def test_pre_iteration_code_globals(
+    def test_pre_iteration_python_code_is_iteration_local(
         self, mock_rlm, mock_repl, mock_history, mock_variables
     ):
-        """Test that pre_iteration python_code is stored in repl_globals."""
+        """Current-iteration code executes once without entering repl_globals."""
 
         def code_hook(iteration, variables, history, input_args):
-            return PreIterationOutput(python_code="import math")
+            return PreIterationOutput(python_code=f"LOCAL_{iteration} = True")
 
         enable_rlm_hooks(mock_rlm, pre_iteration_hook=code_hook)
 
-        action = MagicMock()
-        action.code = "print('hello')"
-        action.reasoning = "test"
+        action = MagicMock(code="print('hello')", reasoning="test")
         mock_rlm.generate_action.return_value = action
         mock_rlm._process_execution_result.return_value = mock_history
 
-        mock_rlm._execute_iteration(
-            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
-        )
+        for iteration in (0, 1):
+            mock_rlm._execute_iteration(
+                mock_repl,
+                mock_variables,
+                mock_history,
+                iteration,
+                {"question": "test"},
+                ["answer"],
+            )
 
-        # Check that repl_globals was updated
-        assert "import math" in mock_repl.repl_globals
+        executed = [call.args[0] for call in mock_repl.execute.call_args_list]
+        assert executed == [
+            "LOCAL_0 = True\nprint('hello')",
+            "LOCAL_1 = True\nprint('hello')",
+        ]
+        assert "LOCAL_0" not in executed[1]
+        assert mock_repl.repl_globals == ""
+
+    def test_persistent_python_code_keep_replace_and_clear(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
+        persistent_by_iteration = {
+            0: "PERSISTENT_A = True",
+            1: None,
+            2: "PERSISTENT_B = True",
+            3: "",
+        }
+
+        def code_hook(iteration, variables, history, input_args):
+            return PreIterationOutput(
+                persistent_python_code=persistent_by_iteration[iteration]
+            )
+
+        enable_rlm_hooks(mock_rlm, pre_iteration_hook=code_hook)
+        mock_rlm.generate_action.return_value = MagicMock(
+            code="generated()", reasoning="test"
+        )
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        for iteration in range(4):
+            mock_rlm._execute_iteration(
+                mock_repl, mock_variables, mock_history, iteration, {}, ["answer"]
+            )
+
+        executed = [call.args[0] for call in mock_repl.execute.call_args_list]
+        assert executed == [
+            "PERSISTENT_A = True\ngenerated()",
+            "PERSISTENT_A = True\ngenerated()",
+            "PERSISTENT_B = True\ngenerated()",
+            "generated()",
+        ]
+        assert mock_repl.repl_globals == ""
+
+    def test_prompt_context_is_visible_only_during_action_generation(
+        self, mock_rlm, mock_repl, mock_history, mock_variables
+    ):
+        def context_hook(iteration, variables, history, input_args):
+            return PreIterationOutput(
+                prompt_context="Explore another branch." if iteration == 0 else ""
+            )
+
+        enable_rlm_hooks(mock_rlm, pre_iteration_hook=context_hook)
+        mock_rlm.generate_action.return_value = MagicMock(
+            code="generated()", reasoning="test"
+        )
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        for iteration in (0, 1):
+            mock_rlm._execute_iteration(
+                mock_repl, mock_variables, mock_history, iteration, {}, ["answer"]
+            )
+
+        first_info = mock_rlm.generate_action.call_args_list[0].kwargs["variables_info"]
+        second_info = mock_rlm.generate_action.call_args_list[1].kwargs[
+            "variables_info"
+        ]
+        assert "Explore another branch." in first_info[-1]
+        assert all("Explore another branch." not in item for item in second_info)
+        assert all(
+            "Explore another branch." not in call.args[0]
+            for call in mock_repl.execute.call_args_list
+        )
 
     def test_post_iteration_stop_flag_calls_extract_fallback(
         self, mock_rlm, mock_repl, mock_history, mock_variables

@@ -119,15 +119,21 @@ class TestHookOutputTypes:
         output = PreIterationOutput()
         assert output.extra_vars == {}
         assert output.python_code == ""
+        assert output.persistent_python_code is None
+        assert output.prompt_context == ""
 
     def test_pre_iteration_output_with_values(self):
         """Test PreIterationOutput with explicit values."""
         output = PreIterationOutput(
             extra_vars={"key": "value"},
-            python_code="import os",
+            python_code="current = True",
+            persistent_python_code="import os",
+            prompt_context="Try a different strategy.",
         )
         assert output.extra_vars == {"key": "value"}
-        assert output.python_code == "import os"
+        assert output.python_code == "current = True"
+        assert output.persistent_python_code == "import os"
+        assert output.prompt_context == "Try a different strategy."
 
     def test_pre_execution_output(self):
         """Test PreExecutionOutput."""
