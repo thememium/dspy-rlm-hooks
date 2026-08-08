@@ -109,7 +109,7 @@ def _make_traced_pre_iteration(hook: PreIterationHook) -> PreIterationHook:
         input_args: dict[str, Any],
     ) -> PreIterationOutput:
         mlflow = _import_mlflow()
-        with mlflow.start_span(name=f"rlm_hook/pre_iteration/{iteration}") as span:
+        with mlflow.start_span(name="rlm_hook/pre_iteration") as span:
             span.set_inputs(
                 {
                     "iteration": iteration,
@@ -135,7 +135,7 @@ def _make_traced_pre_iteration(hook: PreIterationHook) -> PreIterationHook:
         input_args: dict[str, Any],
     ) -> PreIterationOutput:
         mlflow = _import_mlflow()
-        with mlflow.start_span(name=f"rlm_hook/pre_iteration/{iteration}") as span:
+        with mlflow.start_span(name="rlm_hook/pre_iteration") as span:
             span.set_inputs(
                 {
                     "iteration": iteration,
@@ -171,7 +171,7 @@ def _make_traced_pre_execution(hook: PreExecutionHook) -> PreExecutionHook:
         input_args: dict[str, Any],
     ) -> PreExecutionOutput:
         mlflow = _import_mlflow()
-        with mlflow.start_span(name=f"rlm_hook/pre_execution/{iteration}") as span:
+        with mlflow.start_span(name="rlm_hook/pre_execution") as span:
             span.set_inputs(
                 {
                     "iteration": iteration,
@@ -193,7 +193,7 @@ def _make_traced_pre_execution(hook: PreExecutionHook) -> PreExecutionHook:
         input_args: dict[str, Any],
     ) -> PreExecutionOutput:
         mlflow = _import_mlflow()
-        with mlflow.start_span(name=f"rlm_hook/pre_execution/{iteration}") as span:
+        with mlflow.start_span(name="rlm_hook/pre_execution") as span:
             span.set_inputs(
                 {
                     "iteration": iteration,
@@ -224,7 +224,7 @@ def _make_traced_post_execution(hook: PostExecutionHook) -> PostExecutionHook:
         input_args: dict[str, Any],
     ) -> PostExecutionOutput:
         mlflow = _import_mlflow()
-        with mlflow.start_span(name=f"rlm_hook/post_execution/{iteration}") as span:
+        with mlflow.start_span(name="rlm_hook/post_execution") as span:
             span.set_inputs(
                 {
                     "iteration": iteration,
@@ -248,7 +248,7 @@ def _make_traced_post_execution(hook: PostExecutionHook) -> PostExecutionHook:
         input_args: dict[str, Any],
     ) -> PostExecutionOutput:
         mlflow = _import_mlflow()
-        with mlflow.start_span(name=f"rlm_hook/post_execution/{iteration}") as span:
+        with mlflow.start_span(name="rlm_hook/post_execution") as span:
             span.set_inputs(
                 {
                     "iteration": iteration,
@@ -279,7 +279,7 @@ def _make_traced_post_iteration(hook: PostIterationHook) -> PostIterationHook:
         history: Any,
     ) -> PostIterationOutput:
         mlflow = _import_mlflow()
-        with mlflow.start_span(name=f"rlm_hook/post_iteration/{iteration}") as span:
+        with mlflow.start_span(name="rlm_hook/post_iteration") as span:
             span.set_inputs(
                 {
                     "iteration": iteration,
@@ -302,7 +302,7 @@ def _make_traced_post_iteration(hook: PostIterationHook) -> PostIterationHook:
         history: Any,
     ) -> PostIterationOutput:
         mlflow = _import_mlflow()
-        with mlflow.start_span(name=f"rlm_hook/post_iteration/{iteration}") as span:
+        with mlflow.start_span(name="rlm_hook/post_iteration") as span:
             span.set_inputs(
                 {
                     "iteration": iteration,

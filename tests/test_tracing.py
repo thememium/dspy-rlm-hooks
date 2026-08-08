@@ -72,7 +72,7 @@ class TestTracingPreIteration:
         )
 
         # Verify span was created with correct name
-        assert mock_span.name == "rlm_hook/pre_iteration/0"
+        assert mock_span.name == "rlm_hook/pre_iteration"
 
     def test_pre_iteration_records_inputs_and_outputs(
         self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
@@ -162,7 +162,7 @@ class TestTracingPreExecution:
             mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
-        assert mock_span.name == "rlm_hook/pre_execution/0"
+        assert mock_span.name == "rlm_hook/pre_execution"
 
     def test_pre_execution_records_inputs_and_outputs(
         self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
@@ -240,7 +240,7 @@ class TestTracingPostExecution:
             mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
-        assert mock_span.name == "rlm_hook/post_execution/0"
+        assert mock_span.name == "rlm_hook/post_execution"
 
     def test_post_execution_records_inputs_and_outputs(
         self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
@@ -294,7 +294,7 @@ class TestTracingPostIteration:
             mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
-        assert mock_span.name == "rlm_hook/post_iteration/0"
+        assert mock_span.name == "rlm_hook/post_iteration"
 
     def test_post_iteration_records_stop_flag(
         self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
@@ -322,13 +322,13 @@ class TestTracingPostIteration:
         assert outputs["stop"] is True
 
 
-class TestTracingIterationNumbering:
-    """Tests that span names include correct iteration numbers."""
+class TestTracingIterationNaming:
+    """Tests that span names remain stable across iterations."""
 
-    def test_iteration_number_in_span_name(
+    def test_iteration_number_omitted_from_span_name(
         self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
     ):
-        """Test that iteration number appears in the span name."""
+        """Test that iteration numbers do not appear in the span name."""
         mlflow_mod, mock_span = mock_mlflow
         span_names = []
 
@@ -362,8 +362,14 @@ class TestTracingIterationNumbering:
             mock_repl, mock_variables, mock_history, 3, {"question": "test"}, ["answer"]
         )
 
-        assert "rlm_hook/pre_iteration/0" in span_names
-        assert "rlm_hook/pre_iteration/3" in span_names
+        assert span_names == [
+            "rlm_hook/pre_iteration",
+            "rlm_hook/pre_iteration",
+        ]
+        recorded_iterations = [
+            call.args[0]["iteration"] for call in mock_span.set_inputs.call_args_list
+        ]
+        assert recorded_iterations == [0, 3]
 
 
 class TestTracingAllHooks:
@@ -412,10 +418,10 @@ class TestTracingAllHooks:
             mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
-        assert "rlm_hook/pre_iteration/0" in span_names
-        assert "rlm_hook/pre_execution/0" in span_names
-        assert "rlm_hook/post_execution/0" in span_names
-        assert "rlm_hook/post_iteration/0" in span_names
+        assert "rlm_hook/pre_iteration" in span_names
+        assert "rlm_hook/pre_execution" in span_names
+        assert "rlm_hook/post_execution" in span_names
+        assert "rlm_hook/post_iteration" in span_names
 
 
 class TestTracingImportError:
@@ -565,7 +571,7 @@ class TestTracingAsyncPreIteration:
             mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
-        assert mock_span.name == "rlm_hook/pre_iteration/0"
+        assert mock_span.name == "rlm_hook/pre_iteration"
         outputs = mock_span.set_outputs.call_args[0][0]
         assert outputs["extra_vars"]["async"] is True
 
@@ -594,7 +600,7 @@ class TestTracingAsyncPreExecution:
             mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
-        assert mock_span.name == "rlm_hook/pre_execution/0"
+        assert mock_span.name == "rlm_hook/pre_execution"
         outputs = mock_span.set_outputs.call_args[0][0]
         assert "# async modified" in outputs["modified_code"]
 
@@ -623,7 +629,7 @@ class TestTracingAsyncPostExecution:
             mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
-        assert mock_span.name == "rlm_hook/post_execution/0"
+        assert mock_span.name == "rlm_hook/post_execution"
         outputs = mock_span.set_outputs.call_args[0][0]
         assert "async transformed:" in outputs["final_result"]
 
@@ -652,7 +658,7 @@ class TestTracingAsyncPostIteration:
             mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
-        assert mock_span.name == "rlm_hook/post_iteration/0"
+        assert mock_span.name == "rlm_hook/post_iteration"
         outputs = mock_span.set_outputs.call_args[0][0]
         assert outputs["stop"] is False
 
@@ -712,7 +718,7 @@ class TestAutomaticTracing:
             ["answer"],
         )
 
-        assert mock_span.name == "rlm_hook/pre_iteration/0"
+        assert mock_span.name == "rlm_hook/pre_iteration"
         assert mock_repl.execute.call_args.kwargs["variables"]["traced"] is True
 
     def test_enable_rlm_hooks_falls_back_when_mlflow_is_missing(self, mock_rlm):
