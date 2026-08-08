@@ -3,8 +3,8 @@
 The public :func:`dspy_rlm_hooks.enable_rlm_hooks` function automatically
 uses these wrappers when MLflow is available.  The explicit
 :func:`enable_rlm_hooks_with_tracing` entry point is retained for callers that
-want missing MLflow to raise an error.  Hook inputs and outputs are recorded
-on spans, making them visible alongside DSPy's native tracing.
+want missing MLflow to raise an error. Hook inputs, outputs, and the final
+interpreter execution are recorded on spans alongside DSPy's native tracing.
 
 MLflow is an **optional** dependency — install with::
 
@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from types import MethodType
 from typing import Any
 
 from dspy_rlm_hooks.types import (
@@ -48,6 +49,7 @@ from dspy_rlm_hooks.types import (
     PreIterationHook,
     PreIterationOutput,
 )
+from dspy_rlm_hooks.utils import _assemble_execution_code
 
 logger = logging.getLogger(__name__)
 
@@ -349,6 +351,38 @@ def _ensure_type(value: Any, expected_type: type) -> Any:
     return value
 
 
+def _make_traced_execute_code(original_execute_code: Any) -> Any:
+    """Trace the final code and variables passed to the RLM interpreter.
+
+    ``pre_iteration`` hooks persist Python in ``repl.repl_globals`` and
+    ``pre_execution`` hooks can rewrite the generated action.  Assemble those
+    sources exactly as the patched RLM does so the span shows what actually
+    runs, while delegating execution unchanged to ``original_execute_code``.
+    """
+
+    def traced_execute_code(
+        self: Any,
+        repl: Any,
+        code: str,
+        input_args: dict[str, Any],
+    ) -> Any:
+        executed_code = _assemble_execution_code(repl, code)
+
+        mlflow = _import_mlflow()
+        with mlflow.start_span(name="rlm/execute_code") as span:
+            span.set_inputs(
+                {
+                    "code": _format_python_code(executed_code),
+                    "input_args": _safe_serialize(input_args),
+                }
+            )
+            result = original_execute_code(repl, code, input_args)
+            span.set_outputs({"result": _safe_serialize(result)})
+            return result
+
+    return traced_execute_code
+
+
 def enable_rlm_hooks_with_tracing(
     rlm: Any,
     *,
@@ -360,8 +394,8 @@ def enable_rlm_hooks_with_tracing(
     """Inject lifecycle hooks with MLflow span tracking.
 
     Drop-in replacement for :func:`enable_rlm_hooks` that wraps each hook
-    with MLflow span instrumentation.  Hook inputs and outputs are recorded
-    as span attributes, making them visible in the MLflow UI.
+    and final interpreter execution with MLflow span instrumentation. Hook
+    inputs, outputs, and the assembled executed code are visible in the UI.
 
     Requires MLflow to be installed (``pip install mlflow``).
 
@@ -412,4 +446,9 @@ def enable_rlm_hooks_with_tracing(
         post_iteration_hook=_make_traced_post_iteration(post_iteration_hook)
         if post_iteration_hook
         else None,
+    )
+
+    original_execute_code = rlm._execute_code
+    rlm._execute_code = MethodType(
+        _make_traced_execute_code(original_execute_code), rlm
     )

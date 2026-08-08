@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+
+def _assemble_execution_code(repl: Any, code: str) -> str:
+    """Return the final source passed to the RLM code interpreter."""
+    persisted_code = getattr(repl, "repl_globals", "") or ""
+    return f"{persisted_code}\n{code}" if persisted_code else code
+
 
 def _strip_code_fences(code: str) -> str:
     """Remove markdown code fences from LLM-generated code.

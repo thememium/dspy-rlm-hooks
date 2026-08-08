@@ -31,7 +31,7 @@ from dspy_rlm_hooks.types import (
     PreIterationHook,
     PreIterationOutput,
 )
-from dspy_rlm_hooks.utils import _strip_code_fences
+from dspy_rlm_hooks.utils import _assemble_execution_code, _strip_code_fences
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +76,7 @@ def _execute_code(self: Any, repl: Any, code: str, input_args: dict[str, Any]) -
     Mirrors the original ``RLM._execute_code`` logic and is bound as a
     replacement method during :func:`enable_rlm_hooks`.
     """
-    if hasattr(repl, "repl_globals") and repl.repl_globals:
-        code = repl.repl_globals + "\n" + code
+    code = _assemble_execution_code(repl, code)
     try:
         return repl.execute(code, variables=dict(input_args))
     except Exception as exc:  # noqa: BLE001

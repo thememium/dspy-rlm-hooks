@@ -29,18 +29,27 @@ from dspy_rlm_hooks.tracing import (
 
 @pytest.fixture
 def mock_mlflow():
-    """Mock the mlflow module with a working start_span context manager."""
+    """Mock MLflow while keeping hook and execution spans independently inspectable."""
     mock_span = MagicMock()
     mock_span.set_inputs = MagicMock()
     mock_span.set_outputs = MagicMock()
+    created_spans = []
 
     @contextmanager
     def mock_start_span(name):
-        mock_span.name = name
-        yield mock_span
+        if name.startswith("rlm_hook/"):
+            span = mock_span
+        else:
+            span = MagicMock()
+            span.set_inputs = MagicMock()
+            span.set_outputs = MagicMock()
+        span.name = name
+        created_spans.append(span)
+        yield span
 
     mock_mlflow_module = MagicMock()
     mock_mlflow_module.start_span = mock_start_span
+    mock_mlflow_module.created_spans = created_spans
 
     with patch(
         "dspy_rlm_hooks.tracing._import_mlflow", return_value=mock_mlflow_module
@@ -370,7 +379,9 @@ class TestTracingIterationNaming:
 
         assert span_names == [
             "rlm_hook/pre_iteration",
+            "rlm/execute_code",
             "rlm_hook/pre_iteration",
+            "rlm/execute_code",
         ]
         recorded_iterations = [
             call.args[0]["iteration"] for call in mock_span.set_inputs.call_args_list
@@ -424,10 +435,117 @@ class TestTracingAllHooks:
             mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
         )
 
-        assert "rlm_hook/pre_iteration" in span_names
-        assert "rlm_hook/pre_execution" in span_names
-        assert "rlm_hook/post_execution" in span_names
-        assert "rlm_hook/post_iteration" in span_names
+        assert span_names == [
+            "rlm_hook/pre_iteration",
+            "rlm_hook/pre_execution",
+            "rlm/execute_code",
+            "rlm_hook/post_execution",
+            "rlm_hook/post_iteration",
+        ]
+
+
+class TestTracingExecuteCode:
+    """Tests for the span around the final RLM interpreter execution."""
+
+    @staticmethod
+    def _execute_span(mlflow_mod):
+        return next(
+            span for span in mlflow_mod.created_spans if span.name == "rlm/execute_code"
+        )
+
+    def test_execute_span_records_final_assembled_code_and_variables(
+        self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
+    ):
+        mlflow_mod, _ = mock_mlflow
+
+        def inject_hook(iteration, variables, history, input_args):
+            return PreIterationOutput(
+                extra_vars={"injected": "value"},
+                python_code="seed = 7",
+            )
+
+        def rewrite_hook(iteration, code, variables, history, input_args):
+            return PreExecutionOutput(code=f"# rewritten\n{code}")
+
+        enable_rlm_hooks_with_tracing(
+            mock_rlm,
+            pre_iteration_hook=inject_hook,
+            pre_execution_hook=rewrite_hook,
+        )
+
+        action = MagicMock(code="print(seed)", reasoning="test")
+        mock_rlm.generate_action.return_value = action
+        mock_rlm._process_execution_result.return_value = mock_history
+        mock_repl.execute.return_value = "7"
+
+        mock_rlm._execute_iteration(
+            mock_repl,
+            mock_variables,
+            mock_history,
+            0,
+            {"question": "test"},
+            ["answer"],
+        )
+
+        executed_code = "\nseed = 7\n# rewritten\nprint(seed)"
+        execute_span = self._execute_span(mlflow_mod)
+        execute_inputs = execute_span.set_inputs.call_args.args[0]
+        assert execute_inputs == {
+            "code": _format_python_code(executed_code),
+            "input_args": {
+                "question": "test",
+                "injected": "value",
+            },
+        }
+        assert mock_repl.execute.call_args.args[0] == executed_code
+        assert execute_span.set_outputs.call_args.args[0] == {"result": "7"}
+
+    def test_execute_span_is_created_without_lifecycle_hooks(
+        self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
+    ):
+        mlflow_mod, _ = mock_mlflow
+        enable_rlm_hooks_with_tracing(mock_rlm)
+
+        action = MagicMock(code="print('hello')", reasoning="test")
+        mock_rlm.generate_action.return_value = action
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        mock_rlm._execute_iteration(
+            mock_repl,
+            mock_variables,
+            mock_history,
+            0,
+            {"question": "test"},
+            ["answer"],
+        )
+
+        execute_span = self._execute_span(mlflow_mod)
+        execute_inputs = execute_span.set_inputs.call_args.args[0]
+        assert execute_inputs["code"] == "```python\nprint('hello')\n```"
+
+    @pytest.mark.asyncio
+    async def test_execute_span_is_created_for_async_iteration(
+        self, mock_rlm, mock_repl, mock_history, mock_variables, mock_mlflow
+    ):
+        mlflow_mod, _ = mock_mlflow
+        enable_rlm_hooks_with_tracing(mock_rlm)
+
+        action = MagicMock(code="print('async')", reasoning="test")
+        mock_rlm.generate_action.acall.return_value = action
+        mock_rlm._process_execution_result.return_value = mock_history
+
+        await mock_rlm._aexecute_iteration(
+            mock_repl,
+            mock_variables,
+            mock_history,
+            0,
+            {"question": "test"},
+            ["answer"],
+        )
+
+        execute_span = self._execute_span(mlflow_mod)
+        execute_inputs = execute_span.set_inputs.call_args.args[0]
+        assert execute_inputs["code"] == "```python\nprint('async')\n```"
 
 
 class TestTracingImportError:

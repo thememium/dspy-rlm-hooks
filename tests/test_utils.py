@@ -4,7 +4,26 @@ from __future__ import annotations
 
 import pytest
 
-from dspy_rlm_hooks.utils import _strip_code_fences
+from dspy_rlm_hooks.utils import _assemble_execution_code, _strip_code_fences
+
+
+class TestAssembleExecutionCode:
+    def test_returns_generated_code_without_persisted_globals(self):
+        class Repl:
+            repl_globals = ""
+
+        assert _assemble_execution_code(Repl(), "print('hello')") == "print('hello')"
+
+    def test_prepends_persisted_globals_exactly_as_the_interpreter_receives_them(self):
+        class Repl:
+            repl_globals = "seed = 7"
+
+        assert _assemble_execution_code(Repl(), "print(seed)") == (
+            "seed = 7\nprint(seed)"
+        )
+
+    def test_supports_interpreters_without_repl_globals(self):
+        assert _assemble_execution_code(object(), "print('hello')") == "print('hello')"
 
 
 class TestStripCodeFences:
