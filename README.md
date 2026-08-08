@@ -42,6 +42,7 @@ DSPy RLM Hooks injects **lifecycle hooks** into DSPy's internal `RLM` iteration 
 - **Result Auditing** — Transform, validate, or retry on errors
 - **History Management** — Inspect and modify the REPL history between iterations
 - **Sync & Async** — Hooks work in either mode; coroutines are auto-detected
+- **Optional MLflow Tracing** — Hook spans are added automatically when MLflow is installed
 - **PredictRLM Support** — Same hook API works on [PredictRLM](https://github.com/Trampoline-AI/predict-rlm) instances
 
 Requires **DSPy 3.1+** and **Pydantic 2+**.
@@ -110,6 +111,19 @@ Or with pip:
 ```bash
 pip install dspy-rlm-hooks
 ```
+
+MLflow tracing is optional. Install the extra to record hook spans:
+
+```bash
+uv add "dspy-rlm-hooks[tracing]"
+# or: pip install "dspy-rlm-hooks[tracing]"
+```
+
+The same `enable_rlm_hooks(...)` call is used either way. The package checks
+MLflow at runtime: if its tracing API is installed, hook inputs and outputs are
+recorded in MLflow spans; otherwise hooks run normally with no MLflow import
+requirement. To combine these spans with DSPy's native traces, configure
+`mlflow.dspy.autolog()` in your application.
 
 ### Basic Usage
 
@@ -235,6 +249,25 @@ async def fetch_context(iteration, variables, history, input_args):
 
 enable_rlm_hooks(rlm, pre_iteration_hook=fetch_context)
 ```
+
+### MLflow Tracing
+
+No tracing-specific enable function is needed:
+
+```python
+import mlflow
+from dspy_rlm_hooks import enable_rlm_hooks
+
+mlflow.dspy.autolog()
+enable_rlm_hooks(rlm, pre_iteration_hook=fetch_context)
+```
+
+When MLflow is available, every configured lifecycle hook gets a span named
+`rlm_hook/<hook_name>/<iteration>`. With DSPy autologging enabled, those spans
+nest under DSPy's active trace. Without MLflow, the same `enable_rlm_hooks`
+call continues to run as regular untraced hooks. The older
+`enable_rlm_hooks_with_tracing` function remains available for callers that
+explicitly want an `ImportError` when MLflow is missing.
 
 ### Disabling Hooks
 
