@@ -34,7 +34,7 @@ Changelog = "https://github.com/thememium/dspy-rlm-hooks/blob/master/CHANGELOG.m
 
 [project.optional-dependencies]
 predict-rlm = ["predict-rlm>=0.1.0"]
-tracing = ["mlflow>=2.0.0"]
+tracing = ["mlflow>=2.14.0"]
 
 [build-system]
 requires = ["uv_build>=0.11.6,<0.12.0"]
