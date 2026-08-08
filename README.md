@@ -136,13 +136,23 @@ rlm = dspy.RLM(...)
 def inject_math(iteration, variables, history, input_args):
     return PreIterationOutput(
         extra_vars={"tool": "calculator"},
-        python_code="import math",
+        persistent_python_code="import math",
+        prompt_context="Verify the calculation before answering.",
     )
 
 enable_rlm_hooks(rlm, pre_iteration_hook=inject_math)
 
 result = rlm(question="What is the square root of 1764?")
 ```
+
+`PreIterationOutput` keeps code lifetimes explicit:
+
+- `python_code` is prepended only to the current iteration's generated code.
+- `persistent_python_code=None` keeps the current persistent prelude, a string
+  replaces it, and `""` clears it. Persistent code runs before every execution.
+- `prompt_context` is shown to the action-generating LLM for the current
+  iteration; it is not executed as Python.
+- `extra_vars` are interpreter variables for the current iteration.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -171,7 +181,7 @@ def pre_iteration(iteration, variables, history, input_args):
     """Inject a regex helper and seed variables before every iteration."""
     return PreIterationOutput(
         extra_vars={"search_pattern": r"TODO|FIXME|HACK"},
-        python_code="""
+        persistent_python_code="""
 import re
 
 def grep(pattern, text):
@@ -326,7 +336,7 @@ result = rlm(query="...")
 
 | Hook | When it fires | What it can do |
 | --- | --- | --- |
-| **PreIteration** | Before action generation | Inject variables (`extra_vars`) and persistent code (`python_code`) |
+| **PreIteration** | Before action generation | Inject current execution code (`python_code`), replace/clear persistent code (`persistent_python_code`), add interpreter variables (`extra_vars`), or steer action generation (`prompt_context`) |
 | **PreExecution** | After code generation, before running | Rewrite or sanitise the generated `code` string |
 | **PostExecution** | After code runs, before history processing | Transform, audit, or replace the raw `result` |
 | **PostIteration** | After result is folded into history | Save learnings, trigger side effects, modify `history`, or set `stop=True` to force final extraction |
