@@ -193,7 +193,9 @@ def test_ac7_hook_composition(mock_rlm, mock_repl, mock_variables, mock_history)
     enable_rlm_hooks(
         mock_rlm, pre_execution_hook=pre_exec, post_execution_hook=post_exec
     )
-    enable_rlm_speculation(mock_rlm)
+    # streaming=False: these tests mock generate_action directly and exercise the
+    # Lazy/JIT composition (streaming wraps generate_action, so disable it here).
+    enable_rlm_speculation(mock_rlm, streaming=False)
 
     action = MagicMock(code="x = llm_query('hello')\n", reasoning="test")
     mock_rlm.generate_action.return_value = action
@@ -281,7 +283,9 @@ async def test_ac11_async_path(mock_rlm, mock_repl, mock_variables, mock_history
     mock_repl.execute = _make_execute(tools)
 
     enable_rlm_hooks(mock_rlm)  # sets _aexecute_iteration to the hooks-patched async
-    enable_rlm_speculation(mock_rlm)  # wraps _execute_code
+    enable_rlm_speculation(
+        mock_rlm, streaming=False
+    )  # Lazy/JIT (mocks generate_action)
 
     action = MagicMock(code="x = llm_query('hello')\n", reasoning="test")
     mock_rlm.generate_action.acall = AsyncMock(return_value=action)
@@ -353,7 +357,9 @@ def test_ac13_order1_hooks_then_speculation(
     enable_rlm_hooks(
         mock_rlm, pre_execution_hook=pre_exec, post_execution_hook=post_exec
     )
-    enable_rlm_speculation(mock_rlm)
+    # streaming=False: these tests mock generate_action directly and exercise the
+    # Lazy/JIT composition (streaming wraps generate_action, so disable it here).
+    enable_rlm_speculation(mock_rlm, streaming=False)
 
     action = MagicMock(code="x = llm_query('hello')\n", reasoning="test")
     mock_rlm.generate_action.return_value = action
@@ -387,7 +393,7 @@ def test_ac13_order2_speculation_then_hooks(
     mock_repl.tools = tools
     mock_repl.execute = _make_execute(tools)
 
-    enable_rlm_speculation(mock_rlm)
+    enable_rlm_speculation(mock_rlm, streaming=False)
     enable_rlm_hooks(mock_rlm, pre_execution_hook=pre_exec)
 
     # enable_rlm_hooks overwrote _execute_code -> speculation is NOT active.
