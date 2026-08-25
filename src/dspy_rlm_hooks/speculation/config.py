@@ -32,6 +32,11 @@ class SpeculationConfig(pydantic.BaseModel):
             :func:`~dspy_rlm_hooks.speculation.tool.speculate`.
         timeout_s: How long (seconds) to wait on a speculative future before
             falling back to the real call.
+        streaming: When ``True`` (default), the shadow feeds the model's
+            streamed ``code`` output during ``generate_action`` so tool calls
+            overlap with main-context token generation. When ``False``, the
+            Lazy/JIT one-shot shadow runs over the fully assembled code block
+            after generation (the pre-streaming behaviour).
     """
 
     enabled: bool = True
@@ -41,6 +46,7 @@ class SpeculationConfig(pydantic.BaseModel):
     speculate_llm_query_batched: bool = True
     speculate_user_tools: bool = False
     timeout_s: float = 5.0
+    streaming: bool = True
 
 
 @dataclass

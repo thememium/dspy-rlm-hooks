@@ -40,6 +40,22 @@ _COMPOUND = (
 )
 _CONTINUATION = ("elif", "else", "except", "finally")
 
+# Opening-fence languages treated as a Python REPL block (mirrors the RLM's
+# own ``_PYTHON_FENCE_LANGS``). The streamed ``code`` field is markdown-fenced
+# (`` ```python ... ``` ``); the peek/segmenter only emits inside a recognized
+# block, so we accept the python family in addition to the synthetic ``repl``.
+_PYTHON_FENCE_LANGS = {"repl", "python", "py", "python3", "py3", ""}
+
+
+def _is_repl_open(line: str) -> bool:
+    """True if *line* opens a Python REPL fence (`` ```repl``/`` ```python``/
+    `` ```py``/... or a bare `` ``` ``)."""
+    if not line.startswith("```"):
+        return False
+    rest = line[3:].strip()
+    lang = rest.split(maxsplit=1)[0] if rest else ""
+    return lang in _PYTHON_FENCE_LANGS
+
 
 @dataclass
 class Segment:
@@ -93,7 +109,7 @@ class StreamSegmenter:
             self._scan_pos = nl + 1
             stripped = line.strip()
             if not self._in_block:
-                if stripped.startswith("```repl"):
+                if _is_repl_open(stripped):
                     self._in_block = True
                     self.blocks.append(_BlockState())
             else:
