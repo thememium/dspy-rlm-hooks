@@ -24,6 +24,10 @@ import pytest
 
 from dspy_rlm_hooks import PostExecutionOutput, PreExecutionOutput, enable_rlm_hooks
 from dspy_rlm_hooks.speculation_integration import (
+    _install_claim_hooks,
+    _make_claim_hook,
+    _placeholder,
+    _sync_registry_fns,
     disable_rlm_speculation,
     enable_rlm_speculation,
 )
@@ -400,3 +404,298 @@ def test_ac13_order2_speculation_then_hooks(
     # Speculation inactive: the real code's llm_query ran directly (no shadow
     # dispatch, no claim) -> exactly one real call.
     assert len(real_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Unit coverage: _placeholder / _register_classifications / _sync_registry_fns
+# ---------------------------------------------------------------------------
+
+
+def test_placeholder_raises():
+    """The placeholder fn is a stand-in that must never be invoked for real."""
+    with pytest.raises(RuntimeError, match="placeholder tool fn"):
+        _placeholder()
+
+
+def test_register_classifications_user_tools(mock_rlm, mock_repl):
+    """User tools passed via `tools` are registered with the master switch."""
+
+    def lookup_price(symbol):
+        return 1.0
+
+    mock_rlm.max_llm_calls = 50
+    mock_repl.tools = {"llm_query": lambda p: p, "lookup_price": lookup_price}
+    mock_repl.execute = _make_execute(mock_repl.tools)
+
+    enable_rlm_speculation(
+        mock_rlm, tools={"lookup_price": lookup_price}, speculate_user_tools=True
+    )
+    spec = mock_rlm._speculator
+    tool_spec = spec.registry.get("lookup_price")
+    assert tool_spec is not None
+    assert tool_spec.speculatable is True
+    assert tool_spec.pure is True
+
+
+def test_register_classifications_user_tool_object(mock_rlm, mock_repl):
+    """A Tool-like object (with a `.func` attribute) is unwrapped on register."""
+
+    class _Tool:
+        def __init__(self, fn):
+            self.func = fn
+
+    def lookup_price(symbol):
+        return 1.0
+
+    mock_rlm.max_llm_calls = 50
+    mock_repl.tools = {"llm_query": lambda p: p, "lookup_price": lookup_price}
+    mock_repl.execute = _make_execute(mock_repl.tools)
+
+    enable_rlm_speculation(
+        mock_rlm, tools={"lookup_price": _Tool(lookup_price)}, speculate_user_tools=True
+    )
+    tool_spec = mock_rlm._speculator.registry.get("lookup_price")
+    assert tool_spec is not None
+    assert tool_spec.fn is lookup_price  # unwrapped from the Tool object
+
+
+def test_sync_registry_fns_no_tools(mock_rlm, mock_repl):
+    """_sync_registry_fns is a no-op when the repl exposes no tools."""
+    mock_rlm.max_llm_calls = 50
+    enable_rlm_speculation(mock_rlm)
+    spec = mock_rlm._speculator
+    # repl.tools is None -> early return, no crash, registry untouched.
+    _sync_registry_fns(spec, MagicMock(tools=None))
+    assert spec.registry.get("llm_query") is not None
+
+
+# ---------------------------------------------------------------------------
+# Unit coverage: _make_claim_hook (counter limit, normalize fallback, batched)
+# ---------------------------------------------------------------------------
+
+
+def test_make_claim_hook_counter_limit():
+    """A claimed call still counts against max_llm_calls; exceeding it raises."""
+
+    def real_tool(prompt):
+        return f"r:{prompt}"
+
+    def claim(prompt):
+        return f"c:{prompt}"
+
+    hook = _make_claim_hook(
+        real_tool=real_tool, claim_hook=claim, name="llm_query", max_llm_calls=2
+    )
+    assert hook("a") == "c:a"
+    assert hook("b") == "c:b"
+    with pytest.raises(RuntimeError, match="LLM call limit exceeded"):
+        hook("c")
+
+
+def test_make_claim_hook_normalize_typeerror_fallback():
+    """When the call args don't bind to the real signature, fall back to raw."""
+
+    def real_tool(a, b):
+        return a + b
+
+    def claim(*args, **kwargs):
+        return args
+
+    hook = _make_claim_hook(
+        real_tool=real_tool, claim_hook=claim, name="llm_query", max_llm_calls=10
+    )
+    # Only one positional arg -> sig.bind raises TypeError -> raw args forwarded.
+    assert hook(1) == (1,)
+
+
+def test_make_claim_hook_batched():
+    """Batched hooks increment the counter by the number of prompts."""
+
+    def real_batched(prompts):
+        return [f"r:{p}" for p in prompts]
+
+    def claim(prompts):
+        return [f"c:{p}" for p in prompts]
+
+    hook = _make_claim_hook(
+        real_tool=real_batched,
+        claim_hook=claim,
+        name="llm_query_batched",
+        max_llm_calls=10,
+    )
+    assert hook(["a", "b", "c"]) == ["c:a", "c:b", "c:c"]
+    # Counter is now 3; a batch of 8 would push it to 11 > 10 -> raise.
+    with pytest.raises(RuntimeError, match="LLM call limit exceeded"):
+        hook(["x"] * 8)
+
+
+# ---------------------------------------------------------------------------
+# Unit coverage: _install_claim_hooks (no tools / non-speculatable / user wrap)
+# ---------------------------------------------------------------------------
+
+
+def test_install_claim_hooks_no_tools(mock_rlm):
+    """_install_claim_hooks is a no-op when the repl exposes no tools."""
+    mock_rlm.max_llm_calls = 50
+    enable_rlm_speculation(mock_rlm)
+    spec = mock_rlm._speculator
+    config = mock_rlm._speculation_config
+    _install_claim_hooks(MagicMock(tools=None), spec, config, mock_rlm)
+
+
+def test_install_claim_hooks_skips_non_speculatable(mock_rlm, mock_repl):
+    """A registered-but-not-speculatable user tool is left unwrapped."""
+
+    def user_tool(x):
+        return x
+
+    tools = {"llm_query": lambda p: p, "user_tool": user_tool}
+    mock_rlm.max_llm_calls = 50
+    mock_repl.tools = tools
+    mock_repl.execute = _make_execute(tools)
+    mock_rlm._execute_code = _real_execute_code
+
+    # speculate_user_tools=False (default) -> user_tool registered but NOT
+    # speculatable -> _install_claim_hooks skips it (line 205).
+    enable_rlm_speculation(mock_rlm, tools={"user_tool": user_tool})
+    mock_rlm._execute_code(mock_repl, "x = user_tool(1)\n", {})
+    assert mock_repl.tools["user_tool"] is user_tool  # unwrapped
+
+
+def test_install_claim_hooks_wraps_speculatable_user_tool(mock_rlm, mock_repl):
+    """A speculatable user tool (non-LLM) is wrapped with its claim hook."""
+
+    def lookup_price(x):
+        return x * 2
+
+    mock_rlm.max_llm_calls = 50
+    tools = {"llm_query": lambda p: p, "lookup_price": lookup_price}
+    mock_repl.tools = tools
+    mock_repl.execute = _make_execute(tools)
+    mock_rlm._execute_code = _real_execute_code
+
+    enable_rlm_speculation(
+        mock_rlm, tools={"lookup_price": lookup_price}, speculate_user_tools=True
+    )
+    mock_rlm._execute_code(mock_repl, "x = lookup_price(2)\n", {})
+    # lookup_price is speculatable and not an LLM tool -> wrapped (line 209).
+    assert mock_repl.tools["lookup_price"] is not lookup_price
+
+
+# ---------------------------------------------------------------------------
+# _speculation_execute_code fallback + exception-swallow paths
+# ---------------------------------------------------------------------------
+
+
+def test_execute_code_fallback_when_disabled(mock_rlm, mock_repl):
+    """When speculation is disabled, the wrapper falls through to the inner fn."""
+    mock_rlm.max_llm_calls = 50
+    tools = {"llm_query": lambda p: p}
+    mock_repl.tools = tools
+    mock_repl.execute = _make_execute(tools)
+    mock_rlm._execute_code = _real_execute_code
+
+    enable_rlm_speculation(mock_rlm)
+    mock_rlm._speculation_config.enabled = False
+
+    result = mock_rlm._execute_code(mock_repl, "x = 1\n", {})
+    assert result == "ok"  # inner ran directly, no shadow, no claim hooks
+
+
+def test_shadow_feed_exception_swallowed(mock_rlm, mock_repl, monkeypatch):
+    """A shadow feed error is swallowed; real execution still proceeds."""
+    mock_rlm.max_llm_calls = 50
+    tools = {"llm_query": lambda p: f"r:{p}"}
+    mock_repl.tools = tools
+    mock_repl.execute = _make_execute(tools)
+    mock_rlm._execute_code = _real_execute_code
+
+    enable_rlm_speculation(mock_rlm)
+    spec = mock_rlm._speculator
+    real_begin = spec.session.begin_stream_turn
+
+    def bad_begin(*a, **k):
+        t = real_begin(*a, **k)
+        t.feed = lambda delta: (_ for _ in ()).throw(RuntimeError("feed boom"))
+        return t
+
+    monkeypatch.setattr(spec.session, "begin_stream_turn", bad_begin)
+    result = mock_rlm._execute_code(mock_repl, "x = llm_query('hi')\n", {})
+    assert result == "ok"
+
+
+def test_shadow_end_exception_swallowed(mock_rlm, mock_repl, monkeypatch):
+    """A shadow turn-end exception is swallowed; real execution proceeds."""
+    mock_rlm.max_llm_calls = 50
+    tools = {"llm_query": lambda p: f"r:{p}"}
+    mock_repl.tools = tools
+    mock_repl.execute = _make_execute(tools)
+    mock_rlm._execute_code = _real_execute_code
+
+    enable_rlm_speculation(mock_rlm)
+    spec = mock_rlm._speculator
+    real_begin = spec.session.begin_stream_turn
+
+    def bad_begin(*a, **k):
+        t = real_begin(*a, **k)
+        t.end = lambda timeout=600: (_ for _ in ()).throw(RuntimeError("end boom"))
+        return t
+
+    monkeypatch.setattr(spec.session, "begin_stream_turn", bad_begin)
+    result = mock_rlm._execute_code(mock_repl, "x = llm_query('hi')\n", {})
+    assert result == "ok"
+
+
+def test_install_claim_hooks_exception_swallowed(mock_rlm, mock_repl, monkeypatch):
+    """A claim-hook install failure is swallowed; real execution proceeds."""
+    import dspy_rlm_hooks.speculation_integration as si
+
+    mock_rlm.max_llm_calls = 50
+    tools = {"llm_query": lambda p: f"r:{p}"}
+    mock_repl.tools = tools
+    mock_repl.execute = _make_execute(tools)
+    mock_rlm._execute_code = _real_execute_code
+
+    enable_rlm_speculation(mock_rlm)
+
+    def boom(*a, **k):
+        raise RuntimeError("install boom")
+
+    monkeypatch.setattr(si, "_install_claim_hooks", boom)
+    result = mock_rlm._execute_code(mock_repl, "x = llm_query('hi')\n", {})
+    assert result == "ok"
+
+
+def test_end_turn_exception_swallowed(mock_rlm, mock_repl, monkeypatch):
+    """An end_turn failure is swallowed; the real result is still returned."""
+    mock_rlm.max_llm_calls = 50
+    tools = {"llm_query": lambda p: f"r:{p}"}
+    mock_repl.tools = tools
+    mock_repl.execute = _make_execute(tools)
+    mock_rlm._execute_code = _real_execute_code
+
+    enable_rlm_speculation(mock_rlm)
+    spec = mock_rlm._speculator
+
+    def boom():
+        raise RuntimeError("end_turn boom")
+
+    monkeypatch.setattr(spec, "end_turn", boom)
+    result = mock_rlm._execute_code(mock_repl, "x = llm_query('hi')\n", {})
+    assert result == "ok"
+
+
+def test_disable_close_exception_swallowed(mock_rlm, mock_repl, monkeypatch):
+    """A speculator.close() failure is swallowed during disable."""
+    mock_rlm.max_llm_calls = 50
+    mock_repl.tools = {"llm_query": lambda p: p}
+
+    enable_rlm_speculation(mock_rlm)
+    spec = mock_rlm._speculator
+
+    def boom():
+        raise RuntimeError("close boom")
+
+    monkeypatch.setattr(spec, "close", boom)
+    disable_rlm_speculation(mock_rlm)
+    assert not hasattr(mock_rlm, "_speculator")
