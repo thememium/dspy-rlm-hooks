@@ -306,15 +306,20 @@ Removes all monkey-patched overrides and reverts to original behaviour.
 ### Concept
 
 Speculative execution (sPTC, speculative programmatic tool calling) runs a
-**shadow pre-pass** over the complete generated code before the real
-interpreter executes it. Independent tool calls are dispatched in parallel, and
-the real run claims the results instead of re-calling. By default the built-in
-sub-LLM tools `llm_query` and `llm_query_batched` are speculated.
+**shadow pre-pass** over generated code and pre-dispatches independent tool
+calls so the real run claims the results instead of re-calling. By default the
+built-in sub-LLM tools `llm_query` and `llm_query_batched` are speculated.
 
-This is the **Lazy/JIT stage**: the shadow runs over the fully assembled code
-block (persistent prelude plus injected variables) ahead of real execution.
-Token-streaming overlap, where the shadow consumes deltas as they stream, is a
-deferred follow-up and not yet available.
+In **streaming mode** (the default) the shadow feeds the model's streamed
+`code` output during `generate_action` — the RLM's underlying `dspy.Predict` —
+so sub-LLM tool calls overlap with main-context token generation. `code` deltas
+are streamed via `dspy.streamify` and fed into the speculation turn as they
+arrive; the real run then claims the pre-dispatched results.
+
+In **Lazy/JIT mode** (`streaming=False`) the shadow runs a one-shot pass over
+the fully assembled code block (persistent prelude plus injected variables)
+ahead of real execution. If streaming is unavailable (non-streaming adapter or
+LM, cache hit) or fails, execution transparently falls back to Lazy/JIT.
 
 ### Install
 
@@ -368,6 +373,9 @@ must never run early. `SpeculationPolicy` also carries `deterministic`,
   per RLM turn.
 - `timeout_s` (default 5.0): how long to wait on the shadow pre-pass before
   falling back to real execution.
+- `streaming` (default True): stream the `code` output during `generate_action`
+  so tool calls overlap with token generation. Set `streaming=False` for the
+  Lazy/JIT one-shot shadow over the assembled block.
 
 ### Composition with Hooks
 
@@ -386,7 +394,8 @@ though hooks still work.
 
 ### Limitations
 
-- Lazy/JIT only. Token-streaming overlap is deferred.
+- Streaming requires a streaming-capable adapter (ChatAdapter/XMLAdapter/JSONAdapter)
+  and an LM that supports streaming. Otherwise execution falls back to Lazy/JIT.
 - The shadow runs in a subprocess for side-effect safety, which adds spawn
   overhead.
 - Only speculatable, pure tools are speculated. Unmarked tools are never run
