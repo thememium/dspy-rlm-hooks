@@ -46,6 +46,14 @@ from typing import Any
 
 from dspy_rlm_hooks.patcher import disable_rlm_hooks
 from dspy_rlm_hooks.patcher import enable_rlm_hooks as _enable_rlm_hooks_without_tracing
+from dspy_rlm_hooks.speculation.config import SpeculationConfig, SpeculationPolicy
+from dspy_rlm_hooks.speculation.session import SpecSession, StreamTurn
+from dspy_rlm_hooks.speculation.tool import speculate
+from dspy_rlm_hooks.speculation_integration import (
+    disable_rlm_speculation,
+    enable_rlm_speculation,
+)
+from dspy_rlm_hooks.speculator import Speculator
 from dspy_rlm_hooks.tracing import (
     _is_mlflow_tracing_available,
     enable_rlm_hooks_with_tracing,
@@ -111,6 +119,14 @@ __all__ = [
     "enable_rlm_hooks",
     "enable_rlm_hooks_with_tracing",
     "disable_rlm_hooks",
+    "enable_rlm_speculation",
+    "disable_rlm_speculation",
+    "SpeculationConfig",
+    "SpeculationPolicy",
+    "speculate",
+    "Speculator",
+    "SpecSession",
+    "StreamTurn",
 ]
 
 # PredictRLM compatibility — available when predict-rlm is installed
