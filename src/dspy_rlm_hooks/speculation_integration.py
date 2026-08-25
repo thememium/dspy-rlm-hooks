@@ -36,9 +36,12 @@ from __future__ import annotations
 
 import builtins
 import inspect
+from collections.abc import Callable
 from functools import wraps
 from types import MethodType
 from typing import Any
+
+from dspy.primitives.prediction import Prediction
 
 from dspy_rlm_hooks.patcher import _validate_rlm
 from dspy_rlm_hooks.speculation.config import SpeculationConfig
@@ -211,6 +214,167 @@ def _install_claim_hooks(
         repl._tools_registered = False
 
 
+def _maybe_begin_streaming_turn(
+    rlm: Any, repl: Any, input_args: dict[str, Any]
+) -> None:
+    """Begin a streaming :class:`StreamTurn` before ``generate_action`` runs.
+
+    Called from the patched ``_execute_iteration``/``_aexecute_iteration`` (the
+    only call sites with both ``repl`` and ``input_args``). Syncs the fresh tool
+    closures (they must be current BEFORE the first peek dispatch, which happens
+    during generation), seeds the shadow with the persistent prelude, and stashes
+    the turn on the RLM for the generate wrapper and ``_speculation_execute_code``
+    to share. Silent on failure so the Lazy/JIT fallback takes over.
+    """
+    spec = getattr(rlm, "_speculator", None)
+    config = getattr(rlm, "_speculation_config", None)
+    if spec is None or config is None or not config.enabled or not config.streaming:
+        return
+    if not _has_speculatable(spec):
+        return
+    try:
+        _sync_registry_fns(spec, repl)
+        turn = spec.session.begin_stream_turn(
+            dict(input_args), shadow_builtins(dict(builtins.__dict__))
+        )
+        prelude = getattr(repl, "repl_globals", "") or ""
+        if prelude:
+            turn.feed(f"```repl\n{prelude}\n```\n")
+        rlm._active_stream_turn = turn
+        rlm._streaming_fed_any = False
+    except Exception:
+        rlm._active_stream_turn = None
+
+
+class _StreamingGenerateAction:
+    """Stand-in for ``rlm.generate_action`` that streams the ``code`` output.
+
+    Wraps the original ``dspy.Predict`` in ``dspy.streamify`` and feeds the
+    streamed ``code`` field deltas into the active :class:`StreamTurn` so the
+    shadow can dispatch tool calls while the model is still generating. Exposes
+    both ``__call__`` (sync path) and ``acall`` (async path). If streaming is
+    unavailable (non-streaming adapter/LM, cache hit) or fails partway, it falls
+    back to the original predict and clears the active turn so the Lazy/JIT
+    shadow in ``_speculation_execute_code`` takes over.
+    """
+
+    def __init__(self, rlm: Any) -> None:
+        self._rlm = rlm
+        self._orig = rlm._speculation_original_generate_action
+        self._sync: Callable | None = None
+        self._async: Callable | None = None
+
+    def _ensure(self) -> tuple[Callable, Callable] | None:
+        """Lazily build the sync/async streamify wrappers around the original
+        predict. Returns ``(sync, async)``, or None if streaming is unavailable."""
+        if self._sync is not None and self._async is not None:
+            return self._sync, self._async
+        try:
+            from dspy.streaming import StreamListener, streamify
+
+            self._sync = streamify(
+                self._orig,
+                stream_listeners=[
+                    StreamListener("code", predict=self._orig, allow_reuse=True)
+                ],
+                async_streaming=False,
+            )
+            self._async = streamify(
+                self._orig,
+                stream_listeners=[
+                    StreamListener("code", predict=self._orig, allow_reuse=True)
+                ],
+                async_streaming=True,
+            )
+            return self._sync, self._async
+        except Exception:
+            self._sync = None
+            self._async = None
+            return None
+
+    def _feed_item(self, item: Any) -> bool:
+        """Feed one streamed item into the active turn. Returns True if the item
+        was a ``code`` delta (streaming produced content)."""
+        from dspy.streaming import StreamResponse
+
+        if isinstance(item, StreamResponse) and item.chunk:
+            if item.signature_field_name == "code":
+                turn = getattr(self._rlm, "_active_stream_turn", None)
+                if turn is not None:
+                    turn.feed(item.chunk)
+                    self._rlm._streaming_fed_any = True
+            return True
+        return False
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        turn = getattr(self._rlm, "_active_stream_turn", None)
+        if turn is None:
+            return self._orig(*args, **kwargs)
+        streams = self._ensure()
+        if streams is None:
+            self._rlm._active_stream_turn = None
+            return self._orig(*args, **kwargs)
+        sync, _ = streams
+        try:
+            for item in sync(*args, **kwargs):
+                if isinstance(item, Prediction):
+                    return item
+                self._feed_item(item)
+        except Exception:
+            self._rlm._active_stream_turn = None
+        return self._orig(*args, **kwargs)
+
+    async def acall(self, *args: Any, **kwargs: Any) -> Any:
+        turn = getattr(self._rlm, "_active_stream_turn", None)
+        if turn is None:
+            return await self._orig.acall(*args, **kwargs)
+        streams = self._ensure()
+        if streams is None:
+            self._rlm._active_stream_turn = None
+            return await self._orig.acall(*args, **kwargs)
+        _, astream = streams
+        try:
+            async for item in astream(*args, **kwargs):
+                if isinstance(item, Prediction):
+                    return item
+                self._feed_item(item)
+        except Exception:
+            self._rlm._active_stream_turn = None
+        return await self._orig.acall(*args, **kwargs)
+
+
+def _speculation_execute_iteration(
+    self: Any,
+    repl: Any,
+    variables: list[Any],
+    history: Any,
+    iteration: int,
+    input_args: dict[str, Any],
+    output_field_names: list[str],
+) -> Any:
+    """Wrapped sync iteration: begin the streaming turn before generation."""
+    _maybe_begin_streaming_turn(self, repl, input_args)
+    inner = self._speculation_original_execute_iteration
+    return inner(repl, variables, history, iteration, input_args, output_field_names)
+
+
+async def _speculation_aexecute_iteration(
+    self: Any,
+    repl: Any,
+    variables: list[Any],
+    history: Any,
+    iteration: int,
+    input_args: dict[str, Any],
+    output_field_names: list[str],
+) -> Any:
+    """Wrapped async iteration: begin the streaming turn before generation."""
+    _maybe_begin_streaming_turn(self, repl, input_args)
+    inner = self._speculation_original_aexecute_iteration
+    return await inner(
+        repl, variables, history, iteration, input_args, output_field_names
+    )
+
+
 def _speculation_execute_code(
     self: Any, repl: Any, code: str, input_args: dict[str, Any]
 ) -> Any:
@@ -231,23 +395,46 @@ def _speculation_execute_code(
     assembled = _assemble_execution_code(repl, code)
     _sync_registry_fns(spec, repl)
 
-    # --- Lazy/JIT shadow pre-pass over the assembled code -------------------
-    if _has_speculatable(spec):
-        t = None
+    # A streaming turn is active when it was begun by the patched iteration
+    # method (streaming mode). Otherwise fall back to the Lazy/JIT one-shot pass.
+    turn = getattr(self, "_active_stream_turn", None)
+    if turn is None:
+        # --- Lazy/JIT shadow pre-pass over the assembled code -----------------
+        if _has_speculatable(spec):
+            t = None
+            try:
+                t = spec.session.begin_stream_turn(
+                    dict(input_args), shadow_builtins(dict(builtins.__dict__))
+                )
+                # CRITICAL: StreamSegmenter only emits inside ```repl fences.
+                t.feed(f"```repl\n{assembled}\n```\n")
+            except Exception:
+                pass  # shadow errors are SAFE: fall through to real execution
+            finally:
+                if t is not None:
+                    try:
+                        t.end(timeout=config.timeout_s)
+                    except Exception:
+                        pass
+    else:
+        # Streaming turn is active (begun during generate_action). If it
+        # produced no code deltas (cache hit, stream failure, or unfenced
+        # output), top up with the full assembled block so the turn still
+        # speculates over what the real interpreter will run.
+        if not getattr(self, "_streaming_fed_any", False):
+            try:
+                turn.feed(f"```repl\n{assembled}\n```\n")
+            except Exception:
+                pass
+        # End the turn BEFORE real execution so the shadow has drained and
+        # queued every dispatch (the reader thread may still be processing
+        # tail messages when the streamed feed returns). Real exec then claims
+        # these queued specs; in-flight ones are awaited by the claim hooks.
         try:
-            t = spec.session.begin_stream_turn(
-                dict(input_args), shadow_builtins(dict(builtins.__dict__))
-            )
-            # CRITICAL: StreamSegmenter only emits inside ```repl fences.
-            t.feed(f"```repl\n{assembled}\n```\n")
+            turn.end(timeout=config.timeout_s)
         except Exception:
-            pass  # shadow errors are SAFE: fall through to real execution
-        finally:
-            if t is not None:
-                try:
-                    t.end(timeout=config.timeout_s)
-                except Exception:
-                    pass
+            pass
+        self._active_stream_turn = None
 
     # --- install claiming hooks into the real tool path ---------------------
     try:
@@ -275,13 +462,23 @@ def enable_rlm_speculation(
     speculate_llm_query_batched: bool = True,
     speculate_user_tools: bool = False,
     timeout_s: float = 5.0,
+    streaming: bool = True,
 ) -> None:
     """Enable speculative execution on a :class:`~dspy.RLM` instance.
 
     Builds a :class:`Speculator` once per RLM, registers the built-in LLM tool
     classifications (plus any classified user tools), and wraps the current
     ``_execute_code`` (which may be the hooks-patched one) so every execution
-    runs a Lazy/JIT shadow pre-pass and installs claiming hooks.
+    runs a shadow pre-pass and installs claiming hooks.
+
+    When ``streaming`` (default) the shadow feeds the model's streamed ``code``
+    output during ``generate_action`` so sub-LLM tool calls overlap with
+    main-context token generation (speculative programmatic tool calling). The
+    ``generate_action`` ``dspy.Predict`` is wrapped in ``dspy.streamify`` and the
+    patched iteration methods begin the streaming turn. When ``streaming=False``
+    the original Lazy/JIT one-shot shadow runs over the fully assembled code
+    block after generation. If streaming is unavailable or fails, execution
+    transparently falls back to Lazy/JIT.
 
     Composes with :func:`~dspy_rlm_hooks.patcher.enable_rlm_hooks`: call hooks
     first, then speculation, for both to be active.
@@ -298,6 +495,8 @@ def enable_rlm_speculation(
         speculate_user_tools: Master switch for user-registered tools.
         timeout_s: How long to wait on the shadow pre-pass before falling back
             to real execution.
+        streaming: Stream the ``code`` output during generation (default True).
+            When False, use the Lazy/JIT one-shot shadow over the assembled code.
     """
     _validate_rlm(rlm)
 
@@ -309,6 +508,7 @@ def enable_rlm_speculation(
         speculate_llm_query_batched=speculate_llm_query_batched,
         speculate_user_tools=speculate_user_tools,
         timeout_s=timeout_s,
+        streaming=streaming,
     )
     spec = Speculator(
         max_inflight=max_inflight,
@@ -320,27 +520,77 @@ def enable_rlm_speculation(
     rlm._speculator = spec
     rlm._speculation_config = config
     rlm._speculation_original_execute_code = original
+    rlm._active_stream_turn = None
+    rlm._streaming_fed_any = False
     rlm._execute_code = MethodType(_speculation_execute_code, rlm)
     rlm._speculation_wrapper = rlm._execute_code
+
+    if streaming:
+        # Wrap the iteration methods (begin the streaming turn before generation)
+        # and replace generate_action with a streaming wrapper.
+        rlm._speculation_original_execute_iteration = rlm._execute_iteration
+        rlm._speculation_original_aexecute_iteration = rlm._aexecute_iteration
+        rlm._speculation_execute_iteration_wrapper = MethodType(
+            _speculation_execute_iteration, rlm
+        )
+        rlm._speculation_aexecute_iteration_wrapper = MethodType(
+            _speculation_aexecute_iteration, rlm
+        )
+        rlm._execute_iteration = rlm._speculation_execute_iteration_wrapper
+        rlm._aexecute_iteration = rlm._speculation_aexecute_iteration_wrapper
+
+        rlm._speculation_original_generate_action = rlm.generate_action
+        rlm._speculation_generate_action_wrapper = _StreamingGenerateAction(rlm)
+        rlm.generate_action = rlm._speculation_generate_action_wrapper
 
 
 def disable_rlm_speculation(rlm: Any) -> None:
     """Remove speculation from an RLM instance.
 
-    Restores whatever ``_execute_code`` was active before speculation (including
-    a hooks-patched one) and shuts down the speculator. Idempotent. If hooks
-    later overwrote the wrapper (Order 2 composition), the current
-    ``_execute_code`` is left untouched so hooks keep working.
+    Restores whatever ``_execute_code``, iteration methods, and ``generate_action``
+    were active before speculation (including hooks-patched ones) and shuts down
+    the speculator. Idempotent. If hooks later overwrote a wrapper (Order 2
+    composition), the current value is left untouched so hooks keep working.
     """
     wrapper = getattr(rlm, "_speculation_wrapper", None)
     original = getattr(rlm, "_speculation_original_execute_code", None)
     if wrapper is not None and getattr(rlm, "_execute_code", None) is wrapper:
         if original is not None:
             rlm._execute_code = original
+    for cur_attr, wrap_attr, orig_attr in (
+        (
+            "_execute_iteration",
+            "_speculation_execute_iteration_wrapper",
+            "_speculation_original_execute_iteration",
+        ),
+        (
+            "_aexecute_iteration",
+            "_speculation_aexecute_iteration_wrapper",
+            "_speculation_original_aexecute_iteration",
+        ),
+        (
+            "generate_action",
+            "_speculation_generate_action_wrapper",
+            "_speculation_original_generate_action",
+        ),
+    ):
+        wrapper = getattr(rlm, wrap_attr, None)
+        if wrapper is not None and getattr(rlm, cur_attr, None) is wrapper:
+            orig = getattr(rlm, orig_attr, None)
+            if orig is not None:
+                setattr(rlm, cur_attr, orig)
     for attr in (
         "_speculation_wrapper",
         "_speculation_original_execute_code",
+        "_speculation_original_execute_iteration",
+        "_speculation_original_aexecute_iteration",
+        "_speculation_execute_iteration_wrapper",
+        "_speculation_aexecute_iteration_wrapper",
+        "_speculation_original_generate_action",
+        "_speculation_generate_action_wrapper",
         "_speculation_config",
+        "_active_stream_turn",
+        "_streaming_fed_any",
     ):
         if hasattr(rlm, attr):
             delattr(rlm, attr)
