@@ -15,6 +15,7 @@ from dspy_rlm_hooks.speculation import (
     repair_tail,
     safe_eval,
 )
+from dspy_rlm_hooks.speculation.streaming import _call_closed_in
 
 SPEC = {"llm_query", "llm_query_batched"}
 
@@ -243,3 +244,303 @@ def test_plan_peeks_skips_unclosed_call():
     # closing paren not yet streamed -> not planned
     plans = plan_peeks("llm_query('a'", SPEC, {})
     assert plans == []
+
+
+# -- StreamSegmenter edge cases ------------------------------------------------
+
+
+def test_pending_tail_ignores_partial_closing_fence():
+    # a partial "```" line is a fence, not code -> excluded from the tail
+    seg = StreamSegmenter()
+    seg.feed("```repl\nx = 1\n```")
+    assert seg.pending_tail() == ""
+
+
+def test_finish_emits_trailing_partial_line():
+    # a partial (no-newline) line is folded into the block on finish()
+    seg = StreamSegmenter()
+    seg.feed("```repl\nx = 1\npartial")
+    assert [s.source for s in seg.finish()] == ["partial"]
+
+
+def test_finish_initializes_lines_for_partial_only_block():
+    # a block with only a partial line (no complete line) has lines=None
+    seg = StreamSegmenter()
+    seg.feed("```repl\npartial")
+    assert [s.source for s in seg.finish()] == ["partial"]
+
+
+def test_dead_block_stops_emitting():
+    # once a block hits a SyntaxError it goes dead and emits nothing further
+    seg = StreamSegmenter()
+    seg.feed("```repl\nx =\n")  # "x =" is a SyntaxError -> dead
+    assert seg.feed("y = 2\n") == []
+
+
+def test_compound_continues_over_blank_lines():
+    # blank lines inside a compound keep it open (they belong to the body)
+    seg = StreamSegmenter()
+    out = seg.feed("```repl\nfor i in range(3):\n    pass\n\nnext = 1\n```\n")
+    assert [s.source for s in out] == [
+        "for i in range(3):\n    pass\n",
+        "next = 1",
+    ]
+
+
+def test_scan_line_state_handles_escaped_quote():
+    # a backslash-escaped quote inside a single-quoted string is not a closer
+    seg = StreamSegmenter()
+    out = seg.feed("```repl\ns = 'a\\'b'\nx = 1\n```\n")
+    assert [s.source for s in out] == ["s = 'a\\'b'", "x = 1"]
+
+
+def test_scan_line_state_stops_at_comment():
+    # a '#' outside a string ends bracket scanning for the rest of the line
+    seg = StreamSegmenter()
+    out = seg.feed("```repl\nx = 1  # comment\ny = 2\n```\n")
+    assert [s.source for s in out] == ["x = 1  # comment", "y = 2"]
+
+
+def test_scan_line_state_resets_unclosed_single_string():
+    # a single-quoted string can't span lines; the scan resets at EOL so the
+    # enclosing compound is still treated as open (never parsed -> no error)
+    seg = StreamSegmenter()
+    seg.feed("```repl\nfor i in range(3):\n    s = 'abc\n")
+    assert seg.pending_tail() == "for i in range(3):\n    s = 'abc\n"
+
+
+# -- repair_tail / _bracket_closers edge cases ---------------------------------
+
+
+def test_repair_tail_drops_final_partial_line():
+    # an unrepairable final line is dropped and the rest is retried
+    assert repair_tail("x = 1\nif :") == "x = 1"
+
+
+def test_bracket_closers_ignores_brackets_in_triple_string():
+    # brackets inside a closed triple-quoted string are not counted
+    assert repair_tail('s = """a[b"""') == 's = """a[b"""'
+
+
+def test_bracket_closers_handles_escaped_quote():
+    # a backslash-escaped quote inside a single-quoted string is not a closer
+    assert repair_tail("s = 'a\\'b'") == "s = 'a\\'b'"
+
+
+def test_bracket_closers_handles_open_triple_string():
+    # an open triple-quoted string swallows the trailing '['; the tail can't
+    # be repaired cheaply so repair_tail gives up
+    assert repair_tail('s = """a\n[') is None
+
+
+def test_bracket_closers_ignores_brackets_in_comments():
+    # a '[' inside a comment must not be treated as an open bracket
+    assert repair_tail("x = 1  # [unclosed\n") == "x = 1  # [unclosed\n"
+
+
+# -- safe_eval edge cases ------------------------------------------------------
+
+
+def test_safe_eval_depth_limit():
+    with pytest.raises(Unresolvable):
+        safe_eval(ast.parse("x", mode="eval").body, {"x": 1}, depth=41)
+
+
+def test_safe_eval_fstring():
+    assert safe_eval(ast.parse("f'val={x}'", mode="eval").body, {"x": 3}) == "val=3"
+
+
+def test_safe_eval_fstring_unresolvable_value():
+    # a JoinedStr value that is neither a FormattedValue nor a Constant
+    node = ast.JoinedStr(values=[ast.Name(id="x", ctx=ast.Load())])
+    with pytest.raises(Unresolvable):
+        safe_eval(node, {})
+
+
+def test_safe_eval_more_binops():
+    assert safe_eval(ast.parse("7 % 3", mode="eval").body, {}) == 1
+    assert safe_eval(ast.parse("5 - 2", mode="eval").body, {}) == 3
+    assert safe_eval(ast.parse("7 // 2", mode="eval").body, {}) == 3
+
+
+def test_safe_eval_subscript_and_slice():
+    assert safe_eval(ast.parse("d['a']", mode="eval").body, {"d": {"a": 1}}) == 1
+    assert safe_eval(ast.parse("xs[1:3]", mode="eval").body, {"xs": [1, 2, 3]}) == [
+        2,
+        3,
+    ]
+
+
+def test_safe_eval_tuple_and_list():
+    assert safe_eval(ast.parse("(1, 2)", mode="eval").body, {}) == (1, 2)
+    assert safe_eval(ast.parse("[1, 2]", mode="eval").body, {}) == [1, 2]
+
+
+def test_safe_eval_dict():
+    assert safe_eval(ast.parse("{'a': 1}", mode="eval").body, {}) == {"a": 1}
+
+
+def test_safe_eval_dict_unpack_unresolvable():
+    with pytest.raises(Unresolvable):
+        safe_eval(ast.parse("{**d}", mode="eval").body, {"d": {}})
+
+
+def test_safe_eval_non_pure_method_unresolvable():
+    with pytest.raises(Unresolvable):
+        safe_eval(ast.parse("s.count('l')", mode="eval").body, {"s": "hello"})
+
+
+def test_safe_eval_listcomp_too_big():
+    with pytest.raises(Unresolvable):
+        safe_eval(ast.parse("[i for i in range(20000)]", mode="eval").body, {})
+
+
+def test_safe_eval_compare_ops():
+    assert safe_eval(ast.parse("1 == 1", mode="eval").body, {}) is True
+    assert safe_eval(ast.parse("1 != 2", mode="eval").body, {}) is True
+    assert safe_eval(ast.parse("1 < 2", mode="eval").body, {}) is True
+    assert safe_eval(ast.parse("1 <= 1", mode="eval").body, {}) is True
+    assert safe_eval(ast.parse("2 > 1", mode="eval").body, {}) is True
+    assert safe_eval(ast.parse("2 >= 2", mode="eval").body, {}) is True
+    assert safe_eval(ast.parse("1 in [1]", mode="eval").body, {}) is True
+    assert safe_eval(ast.parse("2 not in [1]", mode="eval").body, {}) is True
+
+
+def test_safe_eval_compare_unresolvable_op():
+    # `is` is not in the whitelisted comparison ops
+    with pytest.raises(Unresolvable):
+        safe_eval(ast.parse("1 is 1", mode="eval").body, {})
+
+
+def test_safe_eval_ifexp():
+    assert safe_eval(ast.parse("1 if True else 2", mode="eval").body, {}) == 1
+    assert safe_eval(ast.parse("1 if False else 2", mode="eval").body, {}) == 2
+
+
+def test_safe_eval_listcomp_tuple_unpack():
+    assert safe_eval(ast.parse("[a for a, b in [(1, 2)]]", mode="eval").body, {}) == [1]
+
+
+def test_safe_eval_bind_unresolvable_target():
+    # a subscript comprehension target can't be bound -> Unresolvable
+    with pytest.raises(Unresolvable):
+        safe_eval(ast.parse("[x for x[0] in [[1]]]", mode="eval").body, {})
+
+
+def test_safe_eval_rejects_weird_values():
+    class SpecValue:
+        pass
+
+    with pytest.raises(Unresolvable):
+        safe_eval(ast.parse("x", mode="eval").body, {"x": SpecValue()})
+
+
+# -- plan_peeks edge cases -----------------------------------------------------
+
+
+def test_plan_peeks_empty_tail():
+    assert plan_peeks("", SPEC, {}) == []
+
+
+def test_plan_peeks_unroll_unresolvable_iter():
+    # the loop iterable can't be resolved -> no unroll
+    assert plan_peeks("for q in unknown:\n    llm_query(q)\n", SPEC, {}) == []
+
+
+def test_plan_peeks_unroll_skips_when_calls_after_control_flow():
+    # a hooked call hiding after an `if` inside the loop -> no unroll at all
+    plans = plan_peeks(
+        "for q in questions:\n    if q:\n        pass\n    llm_query(q)\n",
+        SPEC,
+        {"questions": ["a"]},
+    )
+    assert plans == []
+
+
+def test_plan_peeks_unroll_bind_unresolvable():
+    # a subscript loop target can't be bound per item -> no unroll
+    plans = plan_peeks(
+        "for q[0] in questions:\n    llm_query(q)\n",
+        SPEC,
+        {"questions": [["a"]]},
+    )
+    assert plans == []
+
+
+def test_plan_peeks_skips_call_with_keywords():
+    plans = plan_peeks("llm_query('a', x=1)\n", SPEC, {})
+    assert plans == []
+
+
+def test_plan_peeks_skips_unresolvable_args():
+    plans = plan_peeks("llm_query(unknown)\n", SPEC, {})
+    assert plans == []
+
+
+def test_plan_peeks_taints_subscript_store():
+    # `data[0] = 1` taints `data`, so a later `llm_query(data)` is skipped
+    plans = plan_peeks("data[0] = 1\nllm_query(data)\n", SPEC, {"data": [1]})
+    assert plans == []
+
+
+def test_plan_peeks_taints_mutating_method():
+    # `data.append(1)` taints `data` (mutation blind spot) -> skip later call
+    plans = plan_peeks("data.append(1)\nllm_query(data)\n", SPEC, {"data": []})
+    assert plans == []
+
+
+def test_plan_peeks_taints_nested_subscript():
+    # `data[0][1] = 2` unwraps to the base name `data`
+    plans = plan_peeks("data[0][1] = 2\nllm_query(data)\n", SPEC, {"data": [[1]]})
+    assert plans == []
+
+
+def test_plan_peeks_unroll_no_calls_after_control_flow():
+    # control flow with no calls after it -> the straight-line prefix is planned
+    plans = plan_peeks(
+        "for q in questions:\n    llm_query(q)\n    if q:\n        pass\n",
+        SPEC,
+        {"questions": ["a"]},
+    )
+    assert [p.args for p in plans] == [("a",)]
+
+
+# -- _call_closed_in (private helper) ------------------------------------------
+
+
+def test_call_closed_in_missing_end():
+    # a call node without end_lineno/end_col_offset is treated as not closed
+    call = ast.Call(func=ast.Name(id="llm_query", ctx=ast.Load()), args=[], keywords=[])
+    assert _call_closed_in("llm_query()", call) is False
+
+
+def test_call_closed_in_end_lineno_beyond():
+    # a call whose end line is past the raw tail is not textually complete
+    call = ast.Call(func=ast.Name(id="llm_query", ctx=ast.Load()), args=[], keywords=[])
+    call.end_lineno = 5
+    call.end_col_offset = 0
+    assert _call_closed_in("llm_query()", call) is False
+
+
+# -- unreachable defensive lines ------------------------------------------------
+#
+# The following lines in streaming.py are defensive and cannot be reached from
+# any public entry point; they are intentionally left uncovered:
+#
+#   * 157  `if not tree.body: continue` — `_next_closed` only ever returns a
+#          source that ast.parse accepts with a non-empty body (leading
+#          blank/comment lines are skipped, and a compound always has a body).
+#   * 218  `break` for a simple statement — a simple statement is always the
+#          last line of its `_drain` buffer (feed drains after every line), so
+#          it never has a following line to break past.
+#   * 246  `if is_compound: return None` — when `is_compound` and not final,
+#          the loop already returns at the `open_phys or (is_compound and not
+#          final)` guard; when not compound this branch is False.
+#   * 248  `if not lines[j - 1:]: return None` — `j` never exceeds `len(lines)`
+#          (it only advances while `j < len(lines)`), so `lines[j-1:]` is always
+#          non-empty.
+#   * 583-584  `except SyntaxError` in `plan_peeks` — `repair_tail` only returns
+#          strings it has already verified with `ast.parse`, so the re-parse
+#          cannot fail.
+#   * 677  `if not isinstance(call.func, ast.Name)` in `_resolve_call` — every
+#          caller reaches it via `_hooked_calls`, which only yields Name calls.
