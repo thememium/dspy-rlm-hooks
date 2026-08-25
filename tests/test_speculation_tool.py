@@ -6,11 +6,19 @@ import asyncio
 
 import pytest
 
-from dspy_rlm_hooks.speculation import (NonSpeculated, SpecKey,
-                                        SpeculationConfig, SpeculationPolicy,
-                                        SpeculativeTool, SpecValue, ToolSpec,
-                                        canonical_hash, contains_nonspec,
-                                        spec_key, speculate)
+from dspy_rlm_hooks.speculation import (
+    NonSpeculated,
+    SpecKey,
+    SpeculationConfig,
+    SpeculationPolicy,
+    SpeculativeTool,
+    SpecValue,
+    ToolSpec,
+    canonical_hash,
+    contains_nonspec,
+    spec_key,
+    speculate,
+)
 
 # -- SpeculationConfig defaults ----------------------------------------------
 

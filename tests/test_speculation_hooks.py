@@ -95,7 +95,7 @@ def test_claim_miss_runs_real():
 
 
 def test_non_speculatable_passthrough():
-    calls: list[str] = []
+    calls: list[int] = []
 
     def side_effect(x: int) -> int:
         calls.append(x)
