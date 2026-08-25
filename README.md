@@ -24,6 +24,7 @@
     <li><a href="#about">About</a></li>
     <li><a href="#quick-start">Quick Start</a></li>
     <li><a href="#usage">Usage</a></li>
+    <li><a href="#speculative-execution">Speculative Execution</a></li>
     <li><a href="#predictrlm-support">PredictRLM Support</a></li>
     <li><a href="#development">Development</a></li>
     <li><a href="#contributing">Contributing</a></li>
@@ -295,6 +296,102 @@ disable_rlm_hooks(rlm)
 ```
 
 Removes all monkey-patched overrides and reverts to original behaviour.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+<!-- SPECULATIVE EXECUTION -->
+
+## Speculative Execution
+
+### Concept
+
+Speculative execution (sPTC, speculative programmatic tool calling) runs a
+**shadow pre-pass** over the complete generated code before the real
+interpreter executes it. Independent tool calls are dispatched in parallel, and
+the real run claims the results instead of re-calling. By default the built-in
+sub-LLM tools `llm_query` and `llm_query_batched` are speculated.
+
+This is the **Lazy/JIT stage**: the shadow runs over the fully assembled code
+block (persistent prelude plus injected variables) ahead of real execution.
+Token-streaming overlap, where the shadow consumes deltas as they stream, is a
+deferred follow-up and not yet available.
+
+### Install
+
+No extra dependency. Speculative execution ships in the same
+`dspy-rlm-hooks` package.
+
+### Quick Start
+
+```python
+import dspy
+from dspy_rlm_hooks import enable_rlm_speculation
+
+rlm = dspy.RLM(...)
+enable_rlm_speculation(rlm)
+
+result = rlm(question="...")
+```
+
+### Classification API
+
+By default only the built-in LLM tools are speculated. To speculate a read-only
+user tool, mark it with `speculate()` and pass it through the `tools` mapping
+with `speculate_user_tools=True`:
+
+```python
+from dspy_rlm_hooks import enable_rlm_speculation, speculate
+
+def lookup_price(symbol: str) -> float:
+    ...
+
+speculate(lookup_price, speculatable=True, pure=True)
+
+enable_rlm_speculation(
+    rlm,
+    tools={"lookup_price": lookup_price},
+    speculate_user_tools=True,
+)
+```
+
+`speculate()` folds a `SpeculationPolicy` into the tool's classification.
+`speculatable=True` requires `pure=True`: a tool with observable side effects
+must never run early. `SpeculationPolicy` also carries `deterministic`,
+`latency_hint_ms`, and an optional per-call `gate` predicate.
+
+### Budget and Timeout
+
+`enable_rlm_speculation` accepts:
+
+- `max_inflight` (default 8): max speculative executions in flight at once.
+- `max_dispatches_per_turn` (default 2048): hard cap on speculative dispatches
+  per RLM turn.
+- `timeout_s` (default 5.0): how long to wait on the shadow pre-pass before
+  falling back to real execution.
+
+### Composition with Hooks
+
+Speculation composes with `enable_rlm_hooks`. Call hooks first, then
+speculation, so both stay active:
+
+```python
+from dspy_rlm_hooks import enable_rlm_hooks, enable_rlm_speculation
+
+enable_rlm_hooks(rlm, pre_execution_hook=sanitize_code)
+enable_rlm_speculation(rlm)
+```
+
+The reverse order leaves speculation inactive (hooks overwrite the wrapper),
+though hooks still work.
+
+### Limitations
+
+- Lazy/JIT only. Token-streaming overlap is deferred.
+- The shadow runs in a subprocess for side-effect safety, which adds spawn
+  overhead.
+- Only speculatable, pure tools are speculated. Unmarked tools are never run
+  early.
+- PredictRLM is not supported.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
