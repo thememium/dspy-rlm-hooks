@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1.10 (2026-08-26)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.9...v0.1.10)
+
+### 🩹 Fixes
+
+- **streaming**: iterative repair_tail avoids RecursionError on long tails ([7857eee](https://github.com/thememium/dspy-rlm-hooks/commit/7857eeed5f2c9d1088b20c8562b6d3979859995d))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
 ## v0.1.9 (2026-08-26)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.8...v0.1.9)
