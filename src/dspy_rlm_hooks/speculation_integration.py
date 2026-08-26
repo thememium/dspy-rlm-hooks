@@ -34,8 +34,10 @@ even when hooks later overwrote the wrapper.
 
 from __future__ import annotations
 
+import atexit
 import builtins
 import inspect
+import weakref
 from collections.abc import Callable
 from functools import wraps
 from types import MethodType
@@ -51,6 +53,36 @@ from dspy_rlm_hooks.utils import _assemble_execution_code
 
 # The built-in LLM tools whose closure-local counter we re-implement on claim.
 _LLM_TOOLS = ("llm_query", "llm_query_batched")
+
+# Weak refs to live Speculators, drained at interpreter exit so the non-daemon
+# launcher pool never blocks process shutdown when the caller does not call
+# ``disable_rlm_speculation`` explicitly.
+_active_speculators: "list[weakref.ref]" = []
+
+
+def _close_speculators() -> None:
+    """Interpreter-exit hook: close every still-live Speculator."""
+    for ref in list(_active_speculators):
+        spec = ref()
+        if spec is not None:
+            try:
+                spec.close()
+            except Exception:
+                pass
+    _active_speculators.clear()
+
+
+atexit.register(_close_speculators)
+
+
+def _register_speculator(spec: Speculator) -> None:
+    _active_speculators.append(weakref.ref(spec))
+
+
+def _unregister_speculator(spec: Speculator) -> None:
+    for ref in list(_active_speculators):
+        if ref() is spec:
+            _active_speculators.remove(ref)
 
 
 def _placeholder(*args: Any, **kwargs: Any) -> Any:
@@ -520,6 +552,7 @@ def enable_rlm_speculation(
         max_dispatches_per_turn=max_dispatches_per_turn,
     )
     _register_classifications(spec, config, tools)
+    _register_speculator(spec)
 
     original = rlm._execute_code
     rlm._speculator = spec
@@ -605,5 +638,6 @@ def disable_rlm_speculation(rlm: Any) -> None:
             spec.close()
         except Exception:
             pass
+        _unregister_speculator(spec)
         if hasattr(rlm, "_speculator"):
             delattr(rlm, "_speculator")
