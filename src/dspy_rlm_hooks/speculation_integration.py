@@ -209,6 +209,11 @@ def _install_claim_hooks(
         if name in _LLM_TOOLS:
             tools[name] = _make_claim_hook(tools[name], claim_hook, name, max_llm_calls)
         else:
+            # Mirror the LLM branch: hide the raw hook's internal ``_tool=ToolSpec``
+            # default from DSPy's tool registration (it is not JSON-serializable).
+            sig = getattr(tools[name], "__signature__", None)
+            if sig is not None:
+                setattr(claim_hook, "__signature__", sig)
             tools[name] = claim_hook
     if hasattr(repl, "_tools_registered"):
         repl._tools_registered = False
