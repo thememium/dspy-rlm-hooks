@@ -98,13 +98,14 @@ class TestEnableDisableHooks:
         with pytest.raises(AttributeError, match="missing required attributes"):
             enable_rlm_hooks(invalid_rlm)
 
-    def test_enable_rlm_hooks_validation_missing_max_iterations(self):
-        """Test validation catches missing max_iterations."""
+    def test_enable_rlm_hooks_validation_missing_max_iters(self):
+        """Test validation catches missing max_iters/max_iterations."""
         invalid_rlm = MagicMock()
         invalid_rlm._execute_iteration = MagicMock()
         invalid_rlm._aexecute_iteration = MagicMock()
         invalid_rlm._process_execution_result = MagicMock()
         invalid_rlm.generate_action = MagicMock()
+        delattr(invalid_rlm, "max_iters")
         delattr(invalid_rlm, "max_iterations")
 
         with pytest.raises(AttributeError, match="missing required attributes"):
@@ -119,15 +120,21 @@ class TestHookOutputTypes:
         output = PreIterationOutput()
         assert output.extra_vars == {}
         assert output.python_code == ""
+        assert output.persistent_python_code is None
+        assert output.prompt_context == ""
 
     def test_pre_iteration_output_with_values(self):
         """Test PreIterationOutput with explicit values."""
         output = PreIterationOutput(
             extra_vars={"key": "value"},
-            python_code="import os",
+            python_code="current = True",
+            persistent_python_code="import os",
+            prompt_context="Try a different strategy.",
         )
         assert output.extra_vars == {"key": "value"}
-        assert output.python_code == "import os"
+        assert output.python_code == "current = True"
+        assert output.persistent_python_code == "import os"
+        assert output.prompt_context == "Try a different strategy."
 
     def test_pre_execution_output(self):
         """Test PreExecutionOutput."""

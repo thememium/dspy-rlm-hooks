@@ -25,6 +25,18 @@ def pytest_addoption(parser):
     )
 
 
+@pytest.fixture(autouse=True)
+def disable_automatic_mlflow_tracing(monkeypatch):
+    """Keep non-tracing tests deterministic even when the MLflow extra is installed."""
+    import dspy_rlm_hooks
+
+    monkeypatch.setattr(
+        dspy_rlm_hooks,
+        "_is_mlflow_tracing_available",
+        lambda: False,
+    )
+
+
 @pytest.fixture
 def mock_rlm():
     """Return a fully-patched mock RLM instance with all required attributes."""
@@ -34,7 +46,7 @@ def mock_rlm():
     rlm._process_execution_result = MagicMock(return_value=MagicMock())
     rlm.generate_action = MagicMock()
     rlm.generate_action.acall = AsyncMock(return_value=MagicMock())
-    rlm.max_iterations = 5
+    rlm.max_iters = 5
     rlm.verbose = False
     rlm._execute_code = MagicMock(return_value="mock_result")
     return rlm

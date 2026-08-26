@@ -42,7 +42,22 @@ Public API
 
 from __future__ import annotations
 
-from dspy_rlm_hooks.patcher import disable_rlm_hooks, enable_rlm_hooks
+from typing import Any
+
+from dspy_rlm_hooks.patcher import disable_rlm_hooks
+from dspy_rlm_hooks.patcher import enable_rlm_hooks as _enable_rlm_hooks_without_tracing
+from dspy_rlm_hooks.speculation.config import SpeculationConfig, SpeculationPolicy
+from dspy_rlm_hooks.speculation.session import SpecSession, StreamTurn
+from dspy_rlm_hooks.speculation.tool import speculate
+from dspy_rlm_hooks.speculation_integration import (
+    disable_rlm_speculation,
+    enable_rlm_speculation,
+)
+from dspy_rlm_hooks.speculator import Speculator
+from dspy_rlm_hooks.tracing import (
+    _is_mlflow_tracing_available,
+    enable_rlm_hooks_with_tracing,
+)
 from dspy_rlm_hooks.types import (
     PostExecutionHook,
     PostExecutionOutput,
@@ -54,6 +69,35 @@ from dspy_rlm_hooks.types import (
     PreIterationOutput,
     RLMHook,
 )
+
+
+def enable_rlm_hooks(
+    rlm: Any,
+    *,
+    pre_iteration_hook: PreIterationHook | None = None,
+    pre_execution_hook: PreExecutionHook | None = None,
+    post_execution_hook: PostExecutionHook | None = None,
+    post_iteration_hook: PostIterationHook | None = None,
+) -> None:
+    """Enable RLM lifecycle hooks and automatically use MLflow when available.
+
+    The optional MLflow dependency is checked in the caller's environment when
+    this function runs.  Supported MLflow installations add a span around each
+    configured hook; without MLflow, the hooks run normally without tracing.
+    """
+    implementation = (
+        enable_rlm_hooks_with_tracing
+        if _is_mlflow_tracing_available()
+        else _enable_rlm_hooks_without_tracing
+    )
+    implementation(
+        rlm,
+        pre_iteration_hook=pre_iteration_hook,
+        pre_execution_hook=pre_execution_hook,
+        post_execution_hook=post_execution_hook,
+        post_iteration_hook=post_iteration_hook,
+    )
+
 
 try:
     from importlib.metadata import version
@@ -73,7 +117,16 @@ __all__ = [
     "PostIterationOutput",
     "RLMHook",
     "enable_rlm_hooks",
+    "enable_rlm_hooks_with_tracing",
     "disable_rlm_hooks",
+    "enable_rlm_speculation",
+    "disable_rlm_speculation",
+    "SpeculationConfig",
+    "SpeculationPolicy",
+    "speculate",
+    "Speculator",
+    "SpecSession",
+    "StreamTurn",
 ]
 
 # PredictRLM compatibility — available when predict-rlm is installed

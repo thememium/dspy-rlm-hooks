@@ -24,6 +24,7 @@
     <li><a href="#about">About</a></li>
     <li><a href="#quick-start">Quick Start</a></li>
     <li><a href="#usage">Usage</a></li>
+    <li><a href="#speculative-execution">Speculative Execution</a></li>
     <li><a href="#predictrlm-support">PredictRLM Support</a></li>
     <li><a href="#development">Development</a></li>
     <li><a href="#contributing">Contributing</a></li>
@@ -42,6 +43,7 @@ DSPy RLM Hooks injects **lifecycle hooks** into DSPy's internal `RLM` iteration 
 - **Result Auditing** — Transform, validate, or retry on errors
 - **History Management** — Inspect and modify the REPL history between iterations
 - **Sync & Async** — Hooks work in either mode; coroutines are auto-detected
+- **Optional MLflow Tracing** — Hook spans are added automatically when MLflow is installed
 - **PredictRLM Support** — Same hook API works on [PredictRLM](https://github.com/Trampoline-AI/predict-rlm) instances
 
 Requires **DSPy 3.1+** and **Pydantic 2+**.
@@ -111,6 +113,19 @@ Or with pip:
 pip install dspy-rlm-hooks
 ```
 
+MLflow tracing is optional. Install the extra to record hook spans:
+
+```bash
+uv add "dspy-rlm-hooks[tracing]"
+# or: pip install "dspy-rlm-hooks[tracing]"
+```
+
+The same `enable_rlm_hooks(...)` call is used either way. The package checks
+MLflow at runtime: if its tracing API is installed, hook inputs and outputs are
+recorded in MLflow spans; otherwise hooks run normally with no MLflow import
+requirement. To combine these spans with DSPy's native traces, configure
+`mlflow.dspy.autolog()` in your application.
+
 ### Basic Usage
 
 ```python
@@ -122,13 +137,23 @@ rlm = dspy.RLM(...)
 def inject_math(iteration, variables, history, input_args):
     return PreIterationOutput(
         extra_vars={"tool": "calculator"},
-        python_code="import math",
+        persistent_python_code="import math",
+        prompt_context="Verify the calculation before answering.",
     )
 
 enable_rlm_hooks(rlm, pre_iteration_hook=inject_math)
 
 result = rlm(question="What is the square root of 1764?")
 ```
+
+`PreIterationOutput` keeps code lifetimes explicit:
+
+- `python_code` is prepended only to the current iteration's generated code.
+- `persistent_python_code=None` keeps the current persistent prelude, a string
+  replaces it, and `""` clears it. Persistent code runs before every execution.
+- `prompt_context` is shown to the action-generating LLM for the current
+  iteration; it is not executed as Python.
+- `extra_vars` are interpreter variables for the current iteration.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -157,7 +182,7 @@ def pre_iteration(iteration, variables, history, input_args):
     """Inject a regex helper and seed variables before every iteration."""
     return PreIterationOutput(
         extra_vars={"search_pattern": r"TODO|FIXME|HACK"},
-        python_code="""
+        persistent_python_code="""
 import re
 
 def grep(pattern, text):
@@ -236,6 +261,32 @@ async def fetch_context(iteration, variables, history, input_args):
 enable_rlm_hooks(rlm, pre_iteration_hook=fetch_context)
 ```
 
+### MLflow Tracing
+
+No tracing-specific enable function is needed:
+
+```python
+import mlflow
+from dspy_rlm_hooks import enable_rlm_hooks
+
+mlflow.dspy.autolog()
+enable_rlm_hooks(rlm, pre_iteration_hook=fetch_context)
+```
+
+When MLflow is available, every configured lifecycle hook gets a stable span
+name, `rlm_hook/<hook_name>`, for every iteration. The iteration number remains
+available in the span inputs. Python source in the trace's `python_code`, `code`,
+`original_code`, and `modified_code` fields is formatted as fenced Python
+Markdown for readable rendering. Every interpreter call also creates an
+`rlm/execute_code` span after action generation and any `pre_execution` hook.
+Its `code` input is the final source that actually ran, including persistent
+Python injected by `pre_iteration`, and its `input_args` include injected
+variables. With DSPy autologging enabled, these spans nest under DSPy's active
+trace. Without MLflow, the same `enable_rlm_hooks`
+call continues to run as regular untraced hooks. The older
+`enable_rlm_hooks_with_tracing` function remains available for callers that
+explicitly want an `ImportError` when MLflow is missing.
+
 ### Disabling Hooks
 
 ```python
@@ -245,6 +296,111 @@ disable_rlm_hooks(rlm)
 ```
 
 Removes all monkey-patched overrides and reverts to original behaviour.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+<!-- SPECULATIVE EXECUTION -->
+
+## Speculative Execution
+
+### Concept
+
+Speculative execution (sPTC, speculative programmatic tool calling) runs a
+**shadow pre-pass** over generated code and pre-dispatches independent tool
+calls so the real run claims the results instead of re-calling. By default the
+built-in sub-LLM tools `llm_query` and `llm_query_batched` are speculated.
+
+In **streaming mode** (the default) the shadow feeds the model's streamed
+`code` output during `generate_action` — the RLM's underlying `dspy.Predict` —
+so sub-LLM tool calls overlap with main-context token generation. `code` deltas
+are streamed via `dspy.streamify` and fed into the speculation turn as they
+arrive; the real run then claims the pre-dispatched results.
+
+In **Lazy/JIT mode** (`streaming=False`) the shadow runs a one-shot pass over
+the fully assembled code block (persistent prelude plus injected variables)
+ahead of real execution. If streaming is unavailable (non-streaming adapter or
+LM, cache hit) or fails, execution transparently falls back to Lazy/JIT.
+
+### Install
+
+No extra dependency. Speculative execution ships in the same
+`dspy-rlm-hooks` package.
+
+### Quick Start
+
+```python
+import dspy
+from dspy_rlm_hooks import enable_rlm_speculation
+
+rlm = dspy.RLM(...)
+enable_rlm_speculation(rlm)
+
+result = rlm(question="...")
+```
+
+### Classification API
+
+By default only the built-in LLM tools are speculated. To speculate a read-only
+user tool, mark it with `speculate()` and pass it through the `tools` mapping
+with `speculate_user_tools=True`:
+
+```python
+from dspy_rlm_hooks import enable_rlm_speculation, speculate
+
+def lookup_price(symbol: str) -> float:
+    ...
+
+speculate(lookup_price, speculatable=True, pure=True)
+
+enable_rlm_speculation(
+    rlm,
+    tools={"lookup_price": lookup_price},
+    speculate_user_tools=True,
+)
+```
+
+`speculate()` folds a `SpeculationPolicy` into the tool's classification.
+`speculatable=True` requires `pure=True`: a tool with observable side effects
+must never run early. `SpeculationPolicy` also carries `deterministic`,
+`latency_hint_ms`, and an optional per-call `gate` predicate.
+
+### Budget and Timeout
+
+`enable_rlm_speculation` accepts:
+
+- `max_inflight` (default 8): max speculative executions in flight at once.
+- `max_dispatches_per_turn` (default 2048): hard cap on speculative dispatches
+  per RLM turn.
+- `timeout_s` (default 5.0): how long to wait on the shadow pre-pass before
+  falling back to real execution.
+- `streaming` (default True): stream the `code` output during `generate_action`
+  so tool calls overlap with token generation. Set `streaming=False` for the
+  Lazy/JIT one-shot shadow over the assembled block.
+
+### Composition with Hooks
+
+Speculation composes with `enable_rlm_hooks`. Call hooks first, then
+speculation, so both stay active:
+
+```python
+from dspy_rlm_hooks import enable_rlm_hooks, enable_rlm_speculation
+
+enable_rlm_hooks(rlm, pre_execution_hook=sanitize_code)
+enable_rlm_speculation(rlm)
+```
+
+The reverse order leaves speculation inactive (hooks overwrite the wrapper),
+though hooks still work.
+
+### Limitations
+
+- Streaming requires a streaming-capable adapter (ChatAdapter/XMLAdapter/JSONAdapter)
+  and an LM that supports streaming. Otherwise execution falls back to Lazy/JIT.
+- The shadow runs in a subprocess for side-effect safety, which adds spawn
+  overhead.
+- Only speculatable, pure tools are speculated. Unmarked tools are never run
+  early.
+- PredictRLM is not supported.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -286,7 +442,7 @@ result = rlm(query="...")
 
 | Hook | When it fires | What it can do |
 | --- | --- | --- |
-| **PreIteration** | Before action generation | Inject variables (`extra_vars`) and persistent code (`python_code`) |
+| **PreIteration** | Before action generation | Inject current execution code (`python_code`), replace/clear persistent code (`persistent_python_code`), add interpreter variables (`extra_vars`), or steer action generation (`prompt_context`) |
 | **PreExecution** | After code generation, before running | Rewrite or sanitise the generated `code` string |
 | **PostExecution** | After code runs, before history processing | Transform, audit, or replace the raw `result` |
 | **PostIteration** | After result is folded into history | Save learnings, trigger side effects, modify `history`, or set `stop=True` to force final extraction |

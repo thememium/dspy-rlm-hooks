@@ -325,25 +325,50 @@ class TestAsyncPreIterationVariables:
         assert call_args[1]["variables"]["async_injected"] is True
 
     @pytest.mark.asyncio
-    async def test_async_pre_iteration_python_code(
+    async def test_async_pre_iteration_code_context_and_persistence(
         self, mock_rlm, mock_repl, mock_history, mock_variables
     ):
-        """Test that async pre_iteration hook python_code is stored in repl_globals."""
+        """Async iterations separate local code, persistence, and LLM context."""
 
         async def code_hook(iteration, variables, history, input_args):
             await asyncio.sleep(0)
-            return PreIterationOutput(python_code="import numpy")
+            return PreIterationOutput(
+                python_code=f"LOCAL_{iteration} = True",
+                persistent_python_code="PERSISTENT = True" if iteration == 0 else None,
+                prompt_context=f"Strategy {iteration}",
+            )
 
-        enable_rlm_hooks(mock_rlm, pre_iteration_hook=code_hook)
+        async def rewrite_hook(iteration, code, variables, history, input_args):
+            await asyncio.sleep(0)
+            return PreExecutionOutput(code=f"# rewritten {iteration}\n{code}")
 
-        action = MagicMock()
-        action.code = "print('hello')"
-        action.reasoning = "test"
+        enable_rlm_hooks(
+            mock_rlm,
+            pre_iteration_hook=code_hook,
+            pre_execution_hook=rewrite_hook,
+        )
+
+        action = MagicMock(code="generated()", reasoning="test")
         mock_rlm.generate_action.acall = AsyncMock(return_value=action)
         mock_rlm._process_execution_result.return_value = mock_history
 
-        await mock_rlm._aexecute_iteration(
-            mock_repl, mock_variables, mock_history, 0, {"question": "test"}, ["answer"]
-        )
+        for iteration in (0, 1):
+            await mock_rlm._aexecute_iteration(
+                mock_repl,
+                mock_variables,
+                mock_history,
+                iteration,
+                {"question": "test"},
+                ["answer"],
+            )
 
-        assert "import numpy" in mock_repl.repl_globals
+        executed = [call.args[0] for call in mock_repl.execute.call_args_list]
+        assert executed == [
+            "PERSISTENT = True\nLOCAL_0 = True\n# rewritten 0\ngenerated()",
+            "PERSISTENT = True\nLOCAL_1 = True\n# rewritten 1\ngenerated()",
+        ]
+        assert "LOCAL_0" not in executed[1]
+        assert mock_repl.repl_globals == "PERSISTENT = True"
+        action_calls = mock_rlm.generate_action.acall.call_args_list
+        assert "Strategy 0" in action_calls[0].kwargs["variables_info"][-1]
+        assert "Strategy 1" in action_calls[1].kwargs["variables_info"][-1]

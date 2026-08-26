@@ -2,6 +2,31 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+
+def _prepend_python_code(code: str, python_code: str) -> str:
+    """Prepend a Python prelude when one is present."""
+    return f"{python_code}\n{code}" if python_code else code
+
+
+def _assemble_execution_code(repl: Any, code: str) -> str:
+    """Return the final source passed to the RLM code interpreter."""
+    persisted_code = getattr(repl, "repl_globals", "") or ""
+    return _prepend_python_code(code, persisted_code)
+
+
+def _with_prompt_context(variables_info: list[str], prompt_context: str) -> list[str]:
+    """Append iteration-local LLM context without presenting it as a variable."""
+    if not prompt_context:
+        return variables_info
+    context = (
+        "Additional context for this iteration "
+        "(instructions only; not a Python variable):\n"
+        f"{prompt_context}"
+    )
+    return [*variables_info, context]
+
 
 def _strip_code_fences(code: str) -> str:
     """Remove markdown code fences from LLM-generated code.

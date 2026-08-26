@@ -4,7 +4,56 @@ from __future__ import annotations
 
 import pytest
 
-from dspy_rlm_hooks.utils import _strip_code_fences
+from dspy_rlm_hooks.utils import (
+    _assemble_execution_code,
+    _prepend_python_code,
+    _strip_code_fences,
+    _with_prompt_context,
+)
+
+
+class TestPrependPythonCode:
+    def test_prepends_iteration_code(self):
+        assert _prepend_python_code("generated()", "current = True") == (
+            "current = True\ngenerated()"
+        )
+
+    def test_empty_iteration_code_leaves_generated_code_unchanged(self):
+        assert _prepend_python_code("generated()", "") == "generated()"
+
+
+class TestPromptContext:
+    def test_appends_labeled_context_without_mutating_input(self):
+        variables_info = ["Variable: question"]
+        result = _with_prompt_context(variables_info, "Explore another branch.")
+
+        assert variables_info == ["Variable: question"]
+        assert result[0] == "Variable: question"
+        assert "not a Python variable" in result[1]
+        assert "Explore another branch." in result[1]
+
+    def test_empty_context_reuses_existing_list(self):
+        variables_info = ["Variable: question"]
+        assert _with_prompt_context(variables_info, "") is variables_info
+
+
+class TestAssembleExecutionCode:
+    def test_returns_generated_code_without_persisted_globals(self):
+        class Repl:
+            repl_globals = ""
+
+        assert _assemble_execution_code(Repl(), "print('hello')") == "print('hello')"
+
+    def test_prepends_persisted_globals_exactly_as_the_interpreter_receives_them(self):
+        class Repl:
+            repl_globals = "seed = 7"
+
+        assert _assemble_execution_code(Repl(), "print(seed)") == (
+            "seed = 7\nprint(seed)"
+        )
+
+    def test_supports_interpreters_without_repl_globals(self):
+        assert _assemble_execution_code(object(), "print('hello')") == "print('hello')"
 
 
 class TestStripCodeFences:

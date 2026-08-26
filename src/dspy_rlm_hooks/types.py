@@ -22,18 +22,28 @@ from dspy.primitives.repl_types import REPLHistory
 class PreIterationOutput(pydantic.BaseModel):
     """Data produced by a ``pre_iteration`` hook.
 
-    Allows injecting variables and persistent Python code into the interpreter
-    namespace before the LLM generates the next action.
+    Separates iteration-local execution code, explicitly persistent interpreter
+    code, execution variables, and context shown to the action-generating LLM.
 
     Attributes:
-        extra_vars: Variables to inject into the interpreter namespace before
-            the next code generation.  These are merged into ``input_args``.
-        python_code: Code to prepend to generated code on every execution.
-            Persists across iterations via ``repl.repl_globals``.
+        extra_vars: Variables available to the code interpreter for the current
+            iteration. These are merged into that iteration's ``input_args``.
+        python_code: Python prepended only to the current iteration's generated
+            code. It is not retained or re-executed on later iterations unless
+            the hook returns it again.
+        persistent_python_code: Replacement for the persistent Python prelude.
+            ``None`` keeps the existing prelude, a string replaces it, and an
+            empty string clears it. The current prelude runs before every
+            subsequent interpreter execution.
+        prompt_context: Iteration-local instructions or context appended to
+            ``variables_info`` before action generation so the LLM can use it.
+            It is not executed as Python.
     """
 
     extra_vars: dict[str, Any] = pydantic.Field(default_factory=dict)
     python_code: str = ""
+    persistent_python_code: str | None = None
+    prompt_context: str = ""
 
 
 class PreExecutionOutput(pydantic.BaseModel):

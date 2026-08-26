@@ -13,7 +13,7 @@ Lifecycle (same 4-hook contract as :mod:`dspy_rlm_hooks.patcher`)::
 
 All four hooks support **full mutation** for PredictRLM:
 
-- ``pre_iteration_hook`` — inject variables and persistent code
+- ``pre_iteration_hook`` — inject variables, execution code, and prompt context
 - ``pre_execution_hook`` — rewrite generated code
 - ``post_execution_hook`` — transform the raw execution result
 - ``post_iteration_hook`` — modify history or set ``stop=True`` to halt
@@ -33,7 +33,12 @@ from dspy_rlm_hooks.types import (
     PreExecutionOutput,
     PreIterationOutput,
 )
-from dspy_rlm_hooks.utils import _strip_code_fences
+from dspy_rlm_hooks.utils import (
+    _assemble_execution_code,
+    _prepend_python_code,
+    _strip_code_fences,
+    _with_prompt_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +113,8 @@ def enable_predict_rlm_hooks(
 
     All four hooks support **full mutation**:
 
-    - ``pre_iteration_hook`` — inject variables and persistent code.
+    - ``pre_iteration_hook`` — inject variables, current or persistent code,
+      and iteration-local action-generation context.
     - ``pre_execution_hook`` — rewrite the generated code.
     - ``post_execution_hook`` — transform the raw execution result before
       it is processed into history.
@@ -147,6 +153,9 @@ def enable_predict_rlm_hooks(
         **kw: Any,
     ) -> Any:
         # --- pre-iteration hook ---
+        iteration_python_code = ""
+        prompt_context = ""
+        persistent_python_code = getattr(repl, "repl_globals", "") or ""
         if self._hook_pre_iteration:
             pre_iter_out = self._hook_pre_iteration(
                 iteration,
@@ -158,16 +167,22 @@ def enable_predict_rlm_hooks(
                 pre_iter_out = _run_async(pre_iter_out)
             pre_iter_out = cast(PreIterationOutput, pre_iter_out)
             input_args = {**input_args, **pre_iter_out.extra_vars}
-            if pre_iter_out.python_code:
-                current_globals = getattr(repl, "repl_globals", "") or ""
-                repl.repl_globals = current_globals + "\n" + pre_iter_out.python_code
+            iteration_python_code = pre_iter_out.python_code
+            prompt_context = pre_iter_out.prompt_context
+            if pre_iter_out.persistent_python_code is not None:
+                persistent_python_code = pre_iter_out.persistent_python_code
+                repl.repl_globals = persistent_python_code
 
-        # Publish iteration context for other wrappers.
+        # Publish iteration context for action-generation and post-hook wrappers.
         self._hook_current_context = {
             "iteration": iteration,
             "variables": variables,
             "history": history,
             "input_args": input_args,
+            "repl": repl,
+            "python_code": iteration_python_code,
+            "persistent_python_code": persistent_python_code,
+            "prompt_context": prompt_context,
         }
         try:
             return orig_execute(
@@ -203,6 +218,9 @@ def enable_predict_rlm_hooks(
         **kw: Any,
     ) -> Any:
         # --- pre-iteration hook (async) ---
+        iteration_python_code = ""
+        prompt_context = ""
+        persistent_python_code = getattr(repl, "repl_globals", "") or ""
         if self._hook_pre_iteration:
             pre_iter_out = self._hook_pre_iteration(
                 iteration,
@@ -214,15 +232,21 @@ def enable_predict_rlm_hooks(
                 pre_iter_out = await pre_iter_out
             pre_iter_out = cast(PreIterationOutput, pre_iter_out)
             input_args = {**input_args, **pre_iter_out.extra_vars}
-            if pre_iter_out.python_code:
-                current_globals = getattr(repl, "repl_globals", "") or ""
-                repl.repl_globals = current_globals + "\n" + pre_iter_out.python_code
+            iteration_python_code = pre_iter_out.python_code
+            prompt_context = pre_iter_out.prompt_context
+            if pre_iter_out.persistent_python_code is not None:
+                persistent_python_code = pre_iter_out.persistent_python_code
+                repl.repl_globals = persistent_python_code
 
         self._hook_current_context = {
             "iteration": iteration,
             "variables": variables,
             "history": history,
             "input_args": input_args,
+            "repl": repl,
+            "python_code": iteration_python_code,
+            "persistent_python_code": persistent_python_code,
+            "prompt_context": prompt_context,
         }
         try:
             return await orig_aexecute(
@@ -241,16 +265,32 @@ def enable_predict_rlm_hooks(
     rlm._aexecute_iteration = MethodType(_wrapped_aexecute_iteration, rlm)
 
     # ------------------------------------------------------------------
-    # Step 4 — Wrap ``generate_action.forward`` for pre_execution_hook
+    # Step 4 — Wrap action generation for context and execution-code hooks
     # ------------------------------------------------------------------
     orig_forward = rlm.generate_action.forward
+    orig_aforward = rlm.generate_action.aforward
+
+    def _with_iteration_context(
+        kwargs: dict[str, Any], ctx: dict[str, Any]
+    ) -> dict[str, Any]:
+        variables_info = list(kwargs.get("variables_info", []))
+        return {
+            **kwargs,
+            "variables_info": _with_prompt_context(
+                variables_info, ctx.get("prompt_context", "")
+            ),
+        }
+
+    def _prepend_iteration_code(code: str, ctx: dict[str, Any]) -> str:
+        code = _prepend_python_code(code, ctx.get("python_code", ""))
+        return _assemble_execution_code(ctx.get("repl"), code)
 
     @functools.wraps(orig_forward)
     def _wrapped_forward(**kwargs: Any) -> Any:
-        result = orig_forward(**kwargs)
+        ctx: dict[str, Any] = getattr(rlm, "_hook_current_context", {})
+        result = orig_forward(**_with_iteration_context(kwargs, ctx))
+        code = _strip_code_fences(result.code or "")
         if rlm._hook_pre_execution:
-            ctx: dict[str, Any] = getattr(rlm, "_hook_current_context", {})
-            code = _strip_code_fences(result.code)
             pre_exec_out = rlm._hook_pre_execution(
                 ctx.get("iteration", 0),
                 code,
@@ -261,10 +301,32 @@ def enable_predict_rlm_hooks(
             if asyncio.iscoroutine(pre_exec_out):
                 pre_exec_out = _run_async(pre_exec_out)
             pre_exec_out = cast(PreExecutionOutput, pre_exec_out)
-            result.code = pre_exec_out.code
+            code = pre_exec_out.code
+        result.code = _prepend_iteration_code(code, ctx)
+        return result
+
+    @functools.wraps(orig_aforward)
+    async def _wrapped_aforward(**kwargs: Any) -> Any:
+        ctx: dict[str, Any] = getattr(rlm, "_hook_current_context", {})
+        result = await orig_aforward(**_with_iteration_context(kwargs, ctx))
+        code = _strip_code_fences(result.code or "")
+        if rlm._hook_pre_execution:
+            pre_exec_out = rlm._hook_pre_execution(
+                ctx.get("iteration", 0),
+                code,
+                ctx.get("variables", []),
+                ctx.get("history", []),
+                ctx.get("input_args", {}),
+            )
+            if asyncio.iscoroutine(pre_exec_out):
+                pre_exec_out = await pre_exec_out
+            pre_exec_out = cast(PreExecutionOutput, pre_exec_out)
+            code = pre_exec_out.code
+        result.code = _prepend_iteration_code(code, ctx)
         return result
 
     rlm.generate_action.forward = _wrapped_forward
+    rlm.generate_action.aforward = _wrapped_aforward
 
     # ------------------------------------------------------------------
     # Step 5 — Wrap ``_process_execution_result`` for post hooks
@@ -348,6 +410,7 @@ def enable_predict_rlm_hooks(
         "_execute_iteration": orig_execute,
         "_aexecute_iteration": orig_aexecute,
         "generate_action_forward": orig_forward,
+        "generate_action_aforward": orig_aforward,
         "_process_execution_result": orig_process,
     }
     rlm._hook_pre_iteration = pre_iteration_hook
@@ -374,6 +437,8 @@ def disable_predict_rlm_hooks(rlm: Any) -> None:
         rlm._aexecute_iteration = originals["_aexecute_iteration"]
     if "generate_action_forward" in originals:
         rlm.generate_action.forward = originals["generate_action_forward"]
+    if "generate_action_aforward" in originals:
+        rlm.generate_action.aforward = originals["generate_action_aforward"]
     if "_process_execution_result" in originals:
         rlm._process_execution_result = originals["_process_execution_result"]
 
