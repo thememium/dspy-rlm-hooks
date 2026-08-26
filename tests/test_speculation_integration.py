@@ -705,3 +705,110 @@ def test_disable_close_exception_swallowed(mock_rlm, mock_repl, monkeypatch):
     monkeypatch.setattr(spec, "close", boom)
     disable_rlm_speculation(mock_rlm)
     assert not hasattr(mock_rlm, "_speculator")
+
+
+# ---------------------------------------------------------------------------
+# Regression: claim hooks leaking into the registry cause a self-claim deadlock
+# (the launcher pool + interpreter shutdown hang for 600s). Guarded by
+# _sync_registry_fns + Launcher.run + the self-claim check in the claim hooks.
+# ---------------------------------------------------------------------------
+
+
+def test_sync_registry_fns_skips_claim_hooks(mock_rlm, mock_repl):
+    """A claim hook left in repl.tools by _install_claim_hooks is never synced
+    into the registry: ToolSpec.fn stays the raw tool."""
+    from dspy_rlm_hooks.speculation.guards import is_claim_hook
+
+    def lookup_price(x):
+        return x * 2
+
+    tools = {"llm_query": lambda p: f"r:{p}", "lookup_price": lookup_price}
+    mock_rlm.max_llm_calls = 50
+    mock_repl.tools = tools
+    mock_repl.execute = _make_execute(tools)
+    mock_rlm._execute_code = _real_execute_code
+
+    enable_rlm_speculation(
+        mock_rlm, tools={"lookup_price": lookup_price}, speculate_user_tools=True
+    )
+    spec = mock_rlm._speculator
+    config = mock_rlm._speculation_config
+
+    # iteration 1: sync the raw fns, then install claim hooks (left in tools)
+    _sync_registry_fns(spec, mock_repl)
+    _install_claim_hooks(mock_repl, spec, config, mock_rlm)
+    assert is_claim_hook(mock_repl.tools["lookup_price"])
+
+    # iteration 2: sync again — MUST NOT copy the hook into the registry
+    _sync_registry_fns(spec, mock_repl)
+    registry_fn = spec.registry.get("lookup_price").fn
+    assert registry_fn is lookup_price
+    assert not is_claim_hook(registry_fn)
+
+
+def test_two_iterations_no_self_claim_deadlock(mock_rlm, mock_repl):
+    """Two sequential _execute_code calls sharing one repl.tools dict (the real
+    RLM iteration pattern) resolve correctly and leave no stuck speculations.
+    Pre-fix, iteration 2 synced the installed claim hook into the registry; the
+    shadow then executed that hook, which claimed its own pending speculation
+    and blocked the launcher pool (and interpreter shutdown) for 600s."""
+    real_calls = []
+
+    def read_file(path):
+        real_calls.append(path)
+        return f"<{path}>"
+
+    tools = {"llm_query": lambda p: f"r:{p}", "read_file": read_file}
+    mock_rlm.max_llm_calls = 50
+    mock_repl.tools = tools
+    mock_repl.execute = _make_execute(tools)
+    mock_rlm._execute_code = _real_execute_code
+
+    enable_rlm_speculation(
+        mock_rlm, tools={"read_file": read_file}, speculate_user_tools=True
+    )
+    spec = mock_rlm._speculator
+    code = "f = read_file('main.py')\n"
+
+    for _ in range(2):
+        mock_rlm._execute_code(mock_repl, code, {})
+
+    # registry still holds the raw fn (no hook leak)
+    assert spec.registry.get("read_file").fn is read_file
+    # the real run claimed the shadow result: read_file ran once per turn
+    assert real_calls == ["main.py", "main.py"]
+    # no speculation left pending/running — a self-claim would never resolve
+    stuck = [s for s in spec.session.store.all if s.state in ("pending", "running")]
+    assert stuck == []
+
+
+def test_launcher_dispatch_never_runs_claim_hook(mock_rlm, mock_repl):
+    """Even if a claim hook is forced onto a ToolSpec.fn (a future leak path),
+    Launcher.dispatch swaps it for the raw tool instead of executing the hook
+    (which would self-claim and block the pool)."""
+    from dspy_rlm_hooks.speculation.guards import is_claim_hook
+
+    real_calls = []
+
+    def lookup_price(x):
+        real_calls.append(x)
+        return x * 2
+
+    tools = {"llm_query": lambda p: p, "lookup_price": lookup_price}
+    mock_rlm.max_llm_calls = 50
+    mock_repl.tools = tools
+
+    enable_rlm_speculation(
+        mock_rlm, tools={"lookup_price": lookup_price}, speculate_user_tools=True
+    )
+    spec = mock_rlm._speculator
+    tool_spec = spec.registry.get("lookup_price")
+    leak_hook = spec.session.real_hooks()["lookup_price"]
+    assert is_claim_hook(leak_hook)
+    tool_spec.fn = leak_hook  # simulate a hook in the registry
+
+    dispatched = spec.session.launcher.dispatch(tool_spec, (3,), {}, "shadow")
+    assert dispatched is not None
+    assert dispatched.done.wait(5.0)  # resolves fast — no self-claim block
+    assert dispatched.result() == 6
+    assert real_calls == [3]  # the RAW tool ran once
