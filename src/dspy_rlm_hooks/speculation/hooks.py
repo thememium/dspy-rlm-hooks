@@ -25,6 +25,7 @@ import asyncio
 import time
 from typing import Any
 
+from dspy_rlm_hooks.speculation.guards import current_spec, raw_tool_fn, tag_claim_hook
 from dspy_rlm_hooks.speculation.store import SpecStore, Speculation
 from dspy_rlm_hooks.speculation.tool import (
     NonSpeculated,
@@ -109,7 +110,9 @@ def make_real_hooks(reg, store: SpecStore, launcher, bus=None) -> dict[str, Any]
         assert tool is not None
 
         if tool.is_async:
-            hooks[name] = _async_real_hook(tool, reg, store, bus)
+            hooks[name] = tag_claim_hook(
+                _async_real_hook(tool, reg, store, bus), raw_fn=tool.fn
+            )
             continue
 
         def hook(*args: Any, _tool=tool, **kwargs: Any):
@@ -122,10 +125,12 @@ def make_real_hooks(reg, store: SpecStore, launcher, bus=None) -> dict[str, Any]
                 out: list[Any] = [None] * len(prompts)
                 misses: list[int] = []
                 claimed: list[tuple[int, Speculation]] = []
+                cur = current_spec()
                 for i, p in enumerate(prompts):
                     key = spec_key(single, (p,) + rest, kwargs)
                     spec = store.claim(key, reuse=single.deterministic)
-                    if spec is None:
+                    if spec is None or spec is cur:
+                        # self-claim guard: waiting on our own worker's done would deadlock the pool
                         bus.emit("claim_miss", key=key, tool=single.name)
                         misses.append(i)
                     else:
@@ -147,7 +152,7 @@ def make_real_hooks(reg, store: SpecStore, launcher, bus=None) -> dict[str, Any]
                 return out
             return _claim_or_run(_tool, tuple(args), kwargs, store, bus)
 
-        hooks[name] = hook
+        hooks[name] = tag_claim_hook(hook, raw_fn=tool.fn)
     return hooks
 
 
@@ -160,6 +165,11 @@ def _claim_or_run(
     t0 = time.perf_counter()
     spec = store.claim(key, reuse=tool.deterministic)
     if spec is not None:
+        if spec is current_spec():
+            # self-claim guard: this hook is being run BY the very worker that
+            # must resolve `spec`; waiting on it would block the pool (and
+            # interpreter shutdown) for the full timeout. Run the raw tool.
+            return raw_tool_fn(tool)(*args, **kwargs)
         bus.emit(
             "claim_hit",
             key=key,
@@ -195,10 +205,12 @@ def _async_real_hook(tool: ToolSpec, reg, store: SpecStore, bus):
             out: list[Any] = [None] * len(prompts)
             misses: list[int] = []
             claimed: list[tuple[int, Speculation]] = []
+            cur = current_spec()
             for i, p in enumerate(prompts):
                 key = spec_key(single, (p,) + rest, kwargs)
                 spec = store.claim(key, reuse=single.deterministic)
-                if spec is None:
+                if spec is None or spec is cur:
+                    # self-claim guard: waiting on our own worker's done would deadlock the pool
                     bus.emit("claim_miss", key=key, tool=single.name)
                     misses.append(i)
                 else:
@@ -229,7 +241,8 @@ def _async_real_hook(tool: ToolSpec, reg, store: SpecStore, bus):
             return out
         key = spec_key(_tool, tuple(args), kwargs)
         spec = store.claim(key, reuse=_tool.deterministic)
-        if spec is None:
+        if spec is None or spec is current_spec():
+            # self-claim guard: waiting on our own worker's done would deadlock the pool
             bus.emit("claim_miss", key=key, tool=_tool.name)
             return await _tool.fn(*args, **kwargs)  # miss: the baseline path
         bus.emit(

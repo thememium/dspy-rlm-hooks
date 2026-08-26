@@ -53,6 +53,9 @@ class Speculator:
         self.max_dispatches_per_turn = max_dispatches_per_turn
         self.taint_skip = taint_skip
         self._session: SpecSession | None = None
+        # last known RAW fn per tool name (never a claim hook), so
+        # _sync_registry_fns can recover when repl.tools holds hooks
+        self._raw_fns: dict[str, Callable] = {}
 
     # ---------------------------------------------------------- registration
     def tool(

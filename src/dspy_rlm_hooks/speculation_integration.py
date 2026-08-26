@@ -47,6 +47,7 @@ from dspy.primitives.prediction import Prediction
 
 from dspy_rlm_hooks.patcher import _validate_rlm
 from dspy_rlm_hooks.speculation.config import SpeculationConfig
+from dspy_rlm_hooks.speculation.guards import is_claim_hook, raw_of, tag_claim_hook
 from dspy_rlm_hooks.speculation.shadow import shadow_builtins
 from dspy_rlm_hooks.speculator import Speculator
 from dspy_rlm_hooks.utils import _assemble_execution_code
@@ -148,14 +149,30 @@ def _sync_registry_fns(spec: Speculator, repl: Any) -> None:
     """Point each registered ToolSpec's ``fn`` at the fresh per-execution closure
     from ``repl.tools`` (``_make_llm_tools`` returns fresh closures each
     forward). The shadow and real hooks both read ``tool.fn`` at call time, so
-    this must happen before the shadow pre-pass dispatches."""
+    this must happen before the shadow pre-pass dispatches.
+
+    A claim hook (left in ``repl.tools`` by a previous iteration's
+    ``_install_claim_hooks``) is NEVER synced: executing a hook as the
+    speculative fn makes it claim+wait on its own pending speculation — a
+    self-claim deadlock that blocks the launcher pool (and interpreter
+    shutdown). Raw fns are cached per tool so a hooked entry falls back to the
+    last known raw implementation.
+    """
     tools = getattr(repl, "tools", None)
     if tools is None:
         return
     for name in spec.registry.names():
         tool = spec.registry.get(name)
         if tool is not None and name in tools:
-            tool.fn = tools[name]
+            candidate = tools[name]
+            if is_claim_hook(candidate):
+                candidate = raw_of(candidate, fallback=None)
+                if candidate is None:
+                    candidate = spec._raw_fns.get(name)
+                if candidate is None:
+                    continue  # leave the existing (raw) fn untouched
+            spec._raw_fns[name] = candidate
+            tool.fn = candidate
 
 
 def _make_claim_hook(
@@ -239,14 +256,18 @@ def _install_claim_hooks(
         if tool_spec is None or not tool_spec.speculatable:
             continue
         if name in _LLM_TOOLS:
-            tools[name] = _make_claim_hook(tools[name], claim_hook, name, max_llm_calls)
+            raw = tools[name]
+            tools[name] = tag_claim_hook(
+                _make_claim_hook(raw, claim_hook, name, max_llm_calls), raw_fn=raw
+            )
         else:
             # Mirror the LLM branch: hide the raw hook's internal ``_tool=ToolSpec``
             # default from DSPy's tool registration (it is not JSON-serializable).
-            sig = getattr(tools[name], "__signature__", None)
+            raw = tools[name]
+            sig = getattr(raw, "__signature__", None)
             if sig is not None:
                 setattr(claim_hook, "__signature__", sig)
-            tools[name] = claim_hook
+            tools[name] = tag_claim_hook(claim_hook, raw_fn=raw)
     if hasattr(repl, "_tools_registered"):
         repl._tools_registered = False
 

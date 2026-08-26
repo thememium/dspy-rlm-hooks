@@ -21,6 +21,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from dspy_rlm_hooks.speculation.budget import Budget
+from dspy_rlm_hooks.speculation.guards import (
+    clear_current,
+    is_claim_hook,
+    mark_current,
+    raw_of,
+)
 from dspy_rlm_hooks.speculation.hooks import (
     make_baseline_hooks,
     make_real_hooks,
@@ -193,11 +199,20 @@ class Launcher:
                 return
             spec.state = "running"
             run_fn = tool.spec_fn or tool.fn
+            if is_claim_hook(run_fn):
+                # A claim hook installed into repl.tools must never be executed
+                # as a speculative fn: it claims+waits on in-flight speculations,
+                # which inside a worker is a self-claim deadlock (see guards).
+                run_fn = raw_of(run_fn, fallback=tool.fn)
             try:
-                if getattr(run_fn, "wants_spec", False):
-                    out = run_fn(*args, _spec=spec, **kwargs)
-                else:
-                    out = run_fn(*args, **kwargs)
+                mark_current(spec)
+                try:
+                    if getattr(run_fn, "wants_spec", False):
+                        out = run_fn(*args, _spec=spec, **kwargs)
+                    else:
+                        out = run_fn(*args, **kwargs)
+                finally:
+                    clear_current()
                 # an async tool hands back a coroutine: drive it here so the
                 # speculation stores the VALUE, not an un-awaited coroutine.
                 if inspect.isawaitable(out):
