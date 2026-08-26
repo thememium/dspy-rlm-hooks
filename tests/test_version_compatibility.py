@@ -34,12 +34,15 @@ class TestDSPyVersionCompatibility:
             "_aexecute_iteration",
             "_process_execution_result",
             "generate_action",
-            "max_iterations",
             "verbose",
         ]
 
         for method in required:
             assert hasattr(rlm, method), f"RLM missing required attribute: {method}"
+
+        # The iteration-cap attribute was renamed across DSPy versions
+        # (max_iterations in <3.3, max_iters in >=3.3); either is acceptable.
+        assert hasattr(rlm, "max_iters") or hasattr(rlm, "max_iterations")
 
     def test_rlm_generate_action_has_acall(self):
         """Test that generate_action has acall for async support."""

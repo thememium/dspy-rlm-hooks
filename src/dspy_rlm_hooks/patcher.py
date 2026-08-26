@@ -55,19 +55,34 @@ def _run_async(coroutine):
             new_loop.close()
 
 
+# ``max_iters`` is intentionally NOT in this tuple: its attribute name changed
+# across DSPy versions (``max_iterations`` in <3.3, ``max_iters`` in >=3.3) and
+# is validated separately in :func:`_validate_rlm`.
 _REQUIRED_METHODS = (
     "_execute_iteration",
     "_aexecute_iteration",
     "_process_execution_result",
     "generate_action",
-    "max_iterations",
     "verbose",
 )
+
+
+def _max_iterations(rlm: Any) -> int:
+    for attr in ("max_iters", "max_iterations"):
+        value = getattr(rlm, attr, None)
+        if value is not None:
+            return value
+    raise AttributeError(
+        "RLM instance missing required attributes: max_iters. "
+        "Ensure you are passing a dspy.RLM instance from dspy>=3.1."
+    )
 
 
 def _validate_rlm(rlm: Any) -> None:
     """Ensure *rlm* exposes the internal methods we need to patch."""
     missing = [name for name in _REQUIRED_METHODS if not hasattr(rlm, name)]
+    if not (hasattr(rlm, "max_iters") or hasattr(rlm, "max_iterations")):
+        missing.append("max_iters")
     if missing:
         raise AttributeError(
             f"RLM instance missing required attributes: {', '.join(missing)}. "
@@ -126,14 +141,14 @@ def _execute_iteration(
     action = self.generate_action(
         variables_info=variables_info,
         repl_history=history,
-        iteration=f"{iteration + 1}/{self.max_iterations}",
+        iteration=f"{iteration + 1}/{_max_iterations(self)}",
     )
 
     if self.verbose:
         logger.info(
             "RLM iteration %d/%d\nReasoning: %s\nCode:\n%s",
             iteration + 1,
-            self.max_iterations,
+            _max_iterations(self),
             action.reasoning,
             action.code,
         )
@@ -230,14 +245,14 @@ async def _aexecute_iteration(
     pred = await self.generate_action.acall(
         variables_info=variables_info,
         repl_history=history,
-        iteration=f"{iteration + 1}/{self.max_iterations}",
+        iteration=f"{iteration + 1}/{_max_iterations(self)}",
     )
 
     if self.verbose:
         logger.info(
             "RLM iteration %d/%d\nReasoning: %s\nCode:\n%s",
             iteration + 1,
-            self.max_iterations,
+            _max_iterations(self),
             pred.reasoning,
             pred.code,
         )
@@ -325,7 +340,7 @@ def enable_rlm_hooks(
         rlm: The RLM instance to patch.  Must expose the internal methods
             ``_execute_iteration``, ``_aexecute_iteration``,
             ``_process_execution_result``, ``generate_action``/``generate_action.acall``,
-            ``max_iterations``, and ``verbose``.
+            ``max_iters`` (or ``max_iterations`` in DSPy <3.3), and ``verbose``.
         pre_iteration_hook: Called before action generation. May inject
             interpreter variables, current or persistent Python preludes, and
             iteration-local action-generation context.

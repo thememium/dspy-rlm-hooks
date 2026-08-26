@@ -98,13 +98,14 @@ class TestEnableDisableHooks:
         with pytest.raises(AttributeError, match="missing required attributes"):
             enable_rlm_hooks(invalid_rlm)
 
-    def test_enable_rlm_hooks_validation_missing_max_iterations(self):
-        """Test validation catches missing max_iterations."""
+    def test_enable_rlm_hooks_validation_missing_max_iters(self):
+        """Test validation catches missing max_iters/max_iterations."""
         invalid_rlm = MagicMock()
         invalid_rlm._execute_iteration = MagicMock()
         invalid_rlm._aexecute_iteration = MagicMock()
         invalid_rlm._process_execution_result = MagicMock()
         invalid_rlm.generate_action = MagicMock()
+        delattr(invalid_rlm, "max_iters")
         delattr(invalid_rlm, "max_iterations")
 
         with pytest.raises(AttributeError, match="missing required attributes"):

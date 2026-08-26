@@ -46,7 +46,7 @@ def mock_rlm():
     rlm._process_execution_result = MagicMock(return_value=MagicMock())
     rlm.generate_action = MagicMock()
     rlm.generate_action.acall = AsyncMock(return_value=MagicMock())
-    rlm.max_iterations = 5
+    rlm.max_iters = 5
     rlm.verbose = False
     rlm._execute_code = MagicMock(return_value="mock_result")
     return rlm
