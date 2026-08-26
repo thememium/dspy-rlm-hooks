@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1.9 (2026-08-26)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.8...v0.1.9)
+
+### 🚀 Enhancements
+
+- Adds mlflow tracing, Speculative programatic tool calling, and Fixes for backward compatibility  (#5) (#5) ([a4361dd](https://github.com/thememium/dspy-rlm-hooks/commit/a4361dd235bd05c573c5029f39a6c7119ea17898))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
 ## v0.1.8 (2026-07-12)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.7...v0.1.8)
