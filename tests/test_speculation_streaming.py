@@ -338,6 +338,14 @@ def test_bracket_closers_ignores_brackets_in_comments():
     assert repair_tail("x = 1  # [unclosed\n") == "x = 1  # [unclosed\n"
 
 
+def test_repair_tail_does_not_recursively_overflow_on_large_unrepairable_tail():
+    # A large multi-line tail that resists every cheap repair used to recurse
+    # once per dropped line and blow the stack (RecursionError). It must now
+    # give up iteratively and return None.
+    tail = "\n".join(f"x{i} = )" for i in range(1500))
+    assert repair_tail(tail) is None
+
+
 # -- safe_eval edge cases ------------------------------------------------------
 
 

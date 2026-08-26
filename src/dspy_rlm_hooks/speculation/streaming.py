@@ -328,27 +328,27 @@ def repair_tail(tail: str) -> str | None:
     accepts the tail. Returns None if it can't be repaired cheaply."""
     if not tail.strip() or len(tail) > _TAIL_LIMIT:
         return None
-    candidates = [tail]
-    closers = _bracket_closers(tail)
-    if closers:
-        candidates.append(tail + closers)
-    for base in list(candidates):
-        stripped = base.rstrip()
-        if stripped.endswith(":"):  # bare compound header
-            candidates.append(stripped + "\n    pass")
-        candidates.append(
-            stripped + "\n    pass" if _last_line_indented(base) else base
-        )
-    for cand in candidates:
-        try:
-            ast.parse(cand)
-            return cand
-        except SyntaxError:
-            continue
-    # last resort: drop the final (partial) line and retry once
     lines = tail.split("\n")
-    if len(lines) > 1:
-        return repair_tail("\n".join(lines[:-1]))
+    # Iterative (was recursive) so a large unrepairable tail cannot blow the stack.
+    for drop in range(len(lines)):
+        text = "\n".join(lines[: len(lines) - drop])
+        candidates = [text]
+        closers = _bracket_closers(text)
+        if closers:
+            candidates.append(text + closers)
+        for base in list(candidates):
+            stripped = base.rstrip()
+            if stripped.endswith(":"):  # bare compound header
+                candidates.append(stripped + "\n    pass")
+            candidates.append(
+                stripped + "\n    pass" if _last_line_indented(base) else base
+            )
+        for cand in candidates:
+            try:
+                ast.parse(cand)
+                return cand
+            except SyntaxError:
+                continue
     return None
 
 
