@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 
 import pytest
 
@@ -69,6 +70,34 @@ def test_claim_hit_returns_speculated_value():
         spec.result(timeout=5)
         assert hooks["llm_query"]("x") == "speculated:x"
         assert calls == ["x"]
+    finally:
+        session.close()
+
+
+def test_dispatch_binds_positional_to_kwargs_only_wrapper():
+    """The RLM wraps user tools as ``invoke(**kwargs)`` which rejects positional
+    args. A speculative dispatch recorded positionally (as the shadow does) must
+    be bound to the signature before execution, or it fails the dispatch."""
+    calls: list[str] = []
+
+    def _real(pattern: str, path: str = ".") -> str:
+        calls.append(f"{pattern}:{path}")
+        return f"found:{pattern}"
+
+    def invoke(**kwargs):  # mirrors dspy RLM _make_interpreter_tool
+        return _real(**kwargs)
+
+    setattr(invoke, "__signature__", inspect.signature(_real))
+
+    reg = _reg(glob_files=(invoke, {"speculatable": True, "pure": True}))
+    session = SpecSession(reg)
+    try:
+        tool = reg.get("glob_files")
+        assert tool is not None
+        spec = session.launcher.dispatch(tool, ("*.py",), {}, "shadow")
+        assert spec is not None
+        assert spec.result(timeout=5) == "found:*.py"
+        assert calls == ["*.py:."]
     finally:
         session.close()
 

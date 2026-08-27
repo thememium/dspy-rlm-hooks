@@ -423,21 +423,24 @@ class ShadowRunner:
             return
         if tool.gate_fn and not tool.gate_fn(args, kwargs):
             return
-        self.launcher.ensure_peeked(tool, args, 1)
+        self.launcher.ensure_peeked(tool, args, kwargs, 1)
 
     def _handle_plans(self, plans) -> None:
         if self.launcher is None:
             return
-        tally = Counter((p.tool, p.args) for p in plans)
+        tally = Counter(
+            (p.tool, p.args, tuple(sorted(p.kwargs.items()))) for p in plans
+        )
         new_tally: dict = {}
-        for (tool_name, args), needed in tally.items():
+        for (tool_name, args, kwargs_items), needed in tally.items():
+            kwargs = dict(kwargs_items)
             tool = self.registry.get(tool_name) if self.registry else None
             if tool is None or not tool.speculatable:
                 continue
-            if tool.gate_fn and not tool.gate_fn(args, {}):
+            if tool.gate_fn and not tool.gate_fn(args, kwargs):
                 continue
-            self.launcher.ensure_peeked(tool, args, needed)
-            new_tally[spec_key(tool, args, {})] = needed
+            self.launcher.ensure_peeked(tool, args, kwargs, needed)
+            new_tally[spec_key(tool, args, kwargs)] = needed
         # BET RETRACTION: a key the previous plan justified but this one doesn't
         # means new tokens invalidated the bet — evict the stale peeks now.
         for key, old_n in self._last_peek_tally.items():

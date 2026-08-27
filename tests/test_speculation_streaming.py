@@ -202,6 +202,22 @@ def test_plan_peeks_resolves_args_from_ns():
     assert plans[0].args == ("hi",)
 
 
+def test_plan_peeks_resolves_keyword_args():
+    plans = plan_peeks("llm_query('/a', offset=2)\n", SPEC, {})
+    assert len(plans) == 1
+    assert plans[0].args == ("/a",)
+    assert plans[0].kwargs == {"offset": 2}
+    kw_plans = plan_peeks("llm_query(prompt='/a', offset=2)\n", SPEC, {})
+    assert len(kw_plans) == 1
+    assert kw_plans[0].args == ()
+    assert kw_plans[0].kwargs == {"prompt": "/a", "offset": 2}
+
+
+def test_plan_peeks_skips_keyword_unpack_and_unresolvable():
+    assert plan_peeks("llm_query(**kw)\n", SPEC, {}) == []
+    assert plan_peeks("llm_query('a', flag=missing)\n", SPEC, {}) == []
+
+
 def test_plan_peeks_for_loop_unroll():
     plans = plan_peeks(
         "for q in questions:\n    llm_query(q)\n", SPEC, {"questions": ["a", "b", "c"]}
@@ -472,11 +488,6 @@ def test_plan_peeks_unroll_bind_unresolvable():
         SPEC,
         {"questions": [["a"]]},
     )
-    assert plans == []
-
-
-def test_plan_peeks_skips_call_with_keywords():
-    plans = plan_peeks("llm_query('a', x=1)\n", SPEC, {})
     assert plans == []
 
 

@@ -253,7 +253,7 @@ class _FakeLauncher:
     def __init__(self) -> None:
         self.peeked: list[tuple[str, tuple, int]] = []
 
-    def ensure_peeked(self, tool, args, needed) -> None:
+    def ensure_peeked(self, tool, args, kwargs, needed) -> None:
         self.peeked.append((tool.name, args, needed))
 
 
