@@ -169,8 +169,6 @@ class StreamSegmenter:
             except SyntaxError:
                 blk.dead = True  # model wrote broken code; real run will error too
                 break
-            if not tree.body:
-                continue
             has_call = any(isinstance(n, ast.Call) for n in ast.walk(tree))
             out.append(
                 Segment(
@@ -256,12 +254,6 @@ class StreamSegmenter:
             # a col-0 non-continuation line: previous compound is closed,
             # but trailing blank lines belong to nobody
             break
-        # never emit the last line group unless another line follows or final
-        if j >= len(lines) and not final:
-            if is_compound:
-                return None
-            if not lines[j - 1 :]:
-                return None
         src = "\n".join(lines[i:j])
         consumed = sum(len(ln) + 1 for ln in lines[:j])
         blk.emitted_upto = start + consumed
