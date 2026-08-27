@@ -687,8 +687,6 @@ def _resolve_call(
     raw_tail: str,
     loop_var_ok: set[str] | frozenset[str] = frozenset(),
 ) -> Plan | None:
-    if call.keywords:
-        return None
     if not isinstance(call.func, ast.Name):
         return None
     # the call must be textually complete in the RAW tail: its closing paren
@@ -707,8 +705,18 @@ def _resolve_call(
         args = tuple(safe_eval(a, ns) for a in call.args)
     except (Unresolvable, Exception):
         return None
-    key = canonical_hash(call.func.id, args, {})
-    return Plan(tool=call.func.id, args=args, key=(call.func.id, key))
+    kwargs: dict = {}
+    for kw in call.keywords:
+        if kw.arg is None:  # **unpack — cannot statically resolve
+            return None
+        if isinstance(kw.value, ast.Name) and kw.value.id in assigned_in_tail:
+            return None
+        try:
+            kwargs[kw.arg] = safe_eval(kw.value, ns)
+        except (Unresolvable, Exception):
+            return None
+    key = canonical_hash(call.func.id, args, kwargs)
+    return Plan(tool=call.func.id, args=args, kwargs=kwargs, key=(call.func.id, key))
 
 
 def _call_closed_in(raw: str, call: ast.Call) -> bool:

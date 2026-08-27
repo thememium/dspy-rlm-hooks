@@ -98,14 +98,33 @@ class ToolSpec:
             )
 
 
+def _canonical_call(tool: ToolSpec, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
+    """Bind a concrete call to the tool's signature and apply defaults, so a
+    positional call ``f(1, 2)`` and a keyword call ``f(a=1, b=2)`` hash to the
+    same key. Falls back to the raw args when the signature cannot bind (no
+    usable signature, too few/many args, or a ``**kwargs``-only tool)."""
+    try:
+        bound = inspect.signature(tool.fn).bind(*args, **kwargs)
+        bound.apply_defaults()
+        return bound.args, bound.kwargs
+    except (TypeError, ValueError):
+        return args, kwargs
+
+
 def spec_key(tool: ToolSpec, args: tuple, kwargs: dict) -> SpecKey:
     """Claim identity for one concrete call.
 
     Both dispatch and claim hash through here, so a shadow dispatch and the
     real REPL claim agree on the same key. ``key_fn`` (if present) reduces the
-    call to a canonical material before hashing.
+    call to a canonical material before hashing; otherwise the call is bound to
+    the tool signature and defaults applied so positional and keyword forms of
+    the same call produce the same key.
     """
-    material = tool.key_fn(args, kwargs) if tool.key_fn else (args, kwargs)
+    if tool.key_fn is not None:
+        material = tool.key_fn(args, kwargs)
+    else:
+        norm_args, norm_kwargs = _canonical_call(tool, args, kwargs)
+        material = (norm_args, norm_kwargs)
     return (tool.name, canonical_hash(tool.name, (material,), {}))
 
 

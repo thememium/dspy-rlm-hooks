@@ -38,6 +38,25 @@ from dspy_rlm_hooks.speculation.streaming import StreamSegmenter
 from dspy_rlm_hooks.speculation.tool import ToolSpec, _is_async_callable, spec_key
 
 
+def _bind_call(fn: Any, args: tuple, kwargs: dict) -> dict:
+    """Bind ``(args, kwargs)`` to ``fn``'s signature and return a single kwargs
+    dict. The shadow records calls positionally (as the generated code wrote
+    them) but the real interpreter invokes tools via ``fn(**kwargs)``, so the
+    speculated execution must mirror that. Falls back to merging raw args by
+    position when the signature cannot be bound."""
+    try:
+        sig = inspect.signature(fn)
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+        return bound.arguments
+    except (TypeError, ValueError):
+        out: dict[str, Any] = {}
+        for i, v in enumerate(args):
+            out[f"__arg{i}"] = v
+        out.update(kwargs)
+        return out
+
+
 class EventBus:
     """Minimal observable event bus: ``emit(kind, **data)`` records to history."""
 
@@ -137,18 +156,20 @@ class Launcher:
             return spec
         return self.dispatch(tool, args, kwargs, source)
 
-    def ensure_peeked(self, tool: ToolSpec, args: tuple, needed: int) -> int:
+    def ensure_peeked(
+        self, tool: ToolSpec, args: tuple, kwargs: dict, needed: int
+    ) -> int:
         """Top the store up to ``needed`` un-adopted peek speculations for this
         exact call (multiplicity-safe dedup across repeated peeks of a growing
         tail). Returns how many new dispatches were made."""
-        key = spec_key(tool, args, {})
+        key = spec_key(tool, args, kwargs)
         if tool.deterministic:
             if self.store.existing(key):
                 return 0
             needed = 1
         new = 0
         while self._unadopted_peeks(key) < needed:
-            if self.dispatch(tool, args, {}, "peek") is None:
+            if self.dispatch(tool, args, kwargs, "peek") is None:
                 break
             new += 1
         return new
@@ -207,10 +228,11 @@ class Launcher:
             try:
                 mark_current(spec)
                 try:
+                    call_kwargs = _bind_call(run_fn, args, kwargs)
                     if getattr(run_fn, "wants_spec", False):
-                        out = run_fn(*args, _spec=spec, **kwargs)
+                        out = run_fn(**call_kwargs, _spec=spec)
                     else:
-                        out = run_fn(*args, **kwargs)
+                        out = run_fn(**call_kwargs)
                 finally:
                     clear_current()
                 # an async tool hands back a coroutine: drive it here so the
