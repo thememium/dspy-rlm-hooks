@@ -539,27 +539,3 @@ def test_call_closed_in_end_lineno_beyond():
     call.end_lineno = 5
     call.end_col_offset = 0
     assert _call_closed_in("llm_query()", call) is False
-
-
-# -- unreachable defensive lines ------------------------------------------------
-#
-# The following lines in streaming.py are defensive and cannot be reached from
-# any public entry point; they are intentionally left uncovered:
-#
-#   * 157  `if not tree.body: continue` — `_next_closed` only ever returns a
-#          source that ast.parse accepts with a non-empty body (leading
-#          blank/comment lines are skipped, and a compound always has a body).
-#   * 218  `break` for a simple statement — a simple statement is always the
-#          last line of its `_drain` buffer (feed drains after every line), so
-#          it never has a following line to break past.
-#   * 246  `if is_compound: return None` — when `is_compound` and not final,
-#          the loop already returns at the `open_phys or (is_compound and not
-#          final)` guard; when not compound this branch is False.
-#   * 248  `if not lines[j - 1:]: return None` — `j` never exceeds `len(lines)`
-#          (it only advances while `j < len(lines)`), so `lines[j-1:]` is always
-#          non-empty.
-#   * 583-584  `except SyntaxError` in `plan_peeks` — `repair_tail` only returns
-#          strings it has already verified with `ast.parse`, so the re-parse
-#          cannot fail.
-#   * 677  `if not isinstance(call.func, ast.Name)` in `_resolve_call` — every
-#          caller reaches it via `_hooked_calls`, which only yields Name calls.

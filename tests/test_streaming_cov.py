@@ -1,26 +1,17 @@
 """Coverage tests for streaming.py defensive/fallback branches.
 
-These target the remaining uncovered lines in ``streaming.py`` that are
-reachable through mocking or direct private-helper calls:
+These target the remaining branches in ``streaming.py`` that are reachable
+through mocking, direct private-helper calls, or hand-built segmenter state:
 
-- ``plan_peeks``'s ``except SyntaxError`` fallback (lines 599-600)
-- ``_resolve_call``'s non-``Name`` func guard (line 691)
-- ``_resolve_call``'s keyword-arg-reads-earlier-assigned-name rail (line 713)
+- ``plan_peeks``'s ``except SyntaxError`` fallback
+- ``_resolve_call``'s non-``Name`` func guard
+- ``_resolve_call``'s keyword-arg-reads-earlier-assigned-name rail
+- the simple-statement break in ``_next_closed``, exercised on a buffer where
+  a closed simple statement is followed by a still-buffered line
 
-The following lines are **genuinely unreachable** defensive branches and are
-intentionally left uncovered (see the justification block at the bottom):
-
-  * 173  ``if not tree.body: continue`` — ``_next_closed`` skips leading
-          blank/comment lines and always returns a source whose first line is a
-          real statement, so ``ast.parse`` always yields a non-empty body.
-  * 234  ``if not is_compound: break`` — ``feed`` drains after every line, so a
-          simple statement is always the last line of its ``_drain`` buffer and
-          never has a following line to break past.
-  * 262  ``if is_compound: return None`` — when ``is_compound`` and not final,
-          the loop already returns at the ``open_phys or (is_compound and not
-          final)`` guard.
-  * 264  ``if not lines[j - 1:]: return None`` — ``j`` only advances while
-          ``j < len(lines)``, so ``lines[j - 1:]`` is always non-empty.
+The formerly "unreachable" empty-body skip and the two post-loop ``return
+None`` guards were deleted outright: no input to ``_next_closed`` could ever
+produce an empty-body parse or an empty slice, so they guarded nothing.
 """
 
 from __future__ import annotations
@@ -28,7 +19,12 @@ from __future__ import annotations
 import ast
 from unittest.mock import patch
 
-from dspy_rlm_hooks.speculation.streaming import _resolve_call, plan_peeks
+from dspy_rlm_hooks.speculation.streaming import (
+    StreamSegmenter,
+    _BlockState,
+    _resolve_call,
+    plan_peeks,
+)
 
 SPEC = {"llm_query"}
 
@@ -63,3 +59,24 @@ def test_plan_peeks_skips_kwarg_reading_earlier_assigned_name():
     """A keyword argument that reads a name assigned earlier in the tail is
     skipped (the assignment hasn't reached the shadow namespace yet)."""
     assert plan_peeks("y = 5\nllm_query('a', flag=y)\n", SPEC, {}) == []
+
+
+def test_simple_statement_followed_by_buffered_line_emits_alone():
+    """A closed simple statement with a following buffered line emits alone.
+
+    White-box: builds a buffer where a closed simple statement is followed by
+    a still-buffered line. The statement is emitted without consuming the
+    follower, which is retained for the next drain.
+    """
+    seg = StreamSegmenter()
+    blk = _BlockState(
+        buf="x = 1\ny = 2\n",
+        emitted_upto=0,
+        stmt_index=0,
+        lines=["x = 1", "y = 2"],
+        scan=None,
+    )
+    src = seg._next_closed(blk, final=False)
+    assert src == "x = 1"
+    assert blk.lines == ["y = 2"]
+    assert blk.emitted_upto == 6
