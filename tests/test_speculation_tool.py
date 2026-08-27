@@ -130,6 +130,28 @@ def test_spec_key_uses_key_fn():
     assert spec_key(spec, (1, "ignored"), {}) == spec_key(spec, (1, "different"), {})
 
 
+def test_spec_key_canonicalizes_positional_and_keyword():
+    def tool(a, b=2, *, c=3):
+        return a
+
+    spec = ToolSpec(name="t", fn=tool)
+    k_pos = spec_key(spec, (1,), {})
+    k_kw = spec_key(spec, (), {"a": 1})
+    k_kw_default = spec_key(spec, (), {"a": 1, "b": 2, "c": 3})
+    assert k_pos == k_kw
+    assert k_pos == k_kw_default
+    # different actual args must NOT collapse
+    assert spec_key(spec, (5,), {}) != k_pos
+
+
+def test_spec_key_canonical_falls_back_unbindable():
+    def tool(*args, **kwargs):
+        return args
+
+    spec = ToolSpec(name="t", fn=tool)
+    assert spec_key(spec, (1, "x"), {"k": 2}) == spec_key(spec, (1, "x"), {"k": 2})
+
+
 def test_spec_key_type_alias():
     k: SpecKey = ("t", "abc")
     assert k == ("t", "abc")
