@@ -550,7 +550,7 @@ def _reject_weird(v: Any) -> None:
     """Refuse to feed shadow-only artifacts (lazy proxies, opaque markers)
     into peek arguments — their concrete value isn't cheaply known yet."""
     tn = type(v).__name__
-    if tn in ("SpecValue", "Opaque"):
+    if tn in ("SpecValue", "Opaque", "NonSpeculated"):
         raise Unresolvable(tn)
 
 
