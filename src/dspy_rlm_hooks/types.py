@@ -13,10 +13,14 @@ Usage::
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Awaitable, Protocol, runtime_checkable
 
 import pydantic
-from dspy.primitives.repl_types import REPLHistory
+
+if TYPE_CHECKING:
+    # Imported lazily so ``import dspy_rlm_hooks`` (and the speculation
+    # engine's shadow subprocess) never pays the dspy import cost.
+    from dspy.primitives.repl_types import REPLHistory
 
 
 class PreIterationOutput(pydantic.BaseModel):
@@ -82,12 +86,14 @@ class PostIterationOutput(pydantic.BaseModel):
 
     Attributes:
         history: The updated history for the next iteration.  Return the same
-            history to persist it, or a modified copy to change it.
+            history to persist it, or a modified copy to change it. Typed as
+            ``Any`` so this model stays importable without dspy (it is a
+            :class:`~dspy.primitives.repl_types.REPLHistory` at runtime).
         stop: If ``True``, immediately stop iterating and force-extract a final
             answer using the same extract-fallback path as max-iterations.
     """
 
-    history: REPLHistory
+    history: Any
     stop: bool = False
 
 
