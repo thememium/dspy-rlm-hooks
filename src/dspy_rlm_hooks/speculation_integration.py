@@ -37,13 +37,12 @@ from __future__ import annotations
 import atexit
 import builtins
 import inspect
+import threading
 import weakref
 from collections.abc import Callable
 from functools import wraps
 from types import MethodType
-from typing import Any
-
-from dspy.primitives.prediction import Prediction
+from typing import TYPE_CHECKING, Any
 
 from dspy_rlm_hooks.patcher import _validate_rlm
 from dspy_rlm_hooks.speculation.config import SpeculationConfig
@@ -51,6 +50,18 @@ from dspy_rlm_hooks.speculation.guards import is_claim_hook, raw_of, tag_claim_h
 from dspy_rlm_hooks.speculation.shadow import shadow_builtins
 from dspy_rlm_hooks.speculator import Speculator
 from dspy_rlm_hooks.utils import _assemble_execution_code
+
+if TYPE_CHECKING:
+    # Kept off the module import path: importing this module must stay cheap
+    # because the speculation engine's shadow subprocess imports this package.
+    from dspy.primitives.prediction import Prediction
+
+
+def _prediction_type() -> type:
+    """Runtime ``Prediction`` class, imported on first use."""
+    from dspy.primitives.prediction import Prediction
+
+    return Prediction
 
 # The built-in LLM tools whose closure-local counter we re-implement on claim.
 _LLM_TOOLS = ("llm_query", "llm_query_batched")
@@ -93,6 +104,14 @@ def _placeholder(*args: Any, **kwargs: Any) -> Any:
     raise RuntimeError(
         "placeholder tool fn — should be replaced per-execution from repl.tools"
     )
+
+
+def _end_turn_quietly(turn: Any, timeout_s: float) -> None:
+    """Finish a StreamTurn off the real-execution critical path."""
+    try:
+        turn.end(timeout=timeout_s)
+    except Exception:
+        pass
 
 
 def _register_classifications(
@@ -375,7 +394,7 @@ class _StreamingGenerateAction:
         sync, _ = streams
         try:
             for item in sync(*args, **kwargs):
-                if isinstance(item, Prediction):
+                if isinstance(item, _prediction_type()):
                     return item
                 self._feed_item(item)
         except Exception:
@@ -393,7 +412,7 @@ class _StreamingGenerateAction:
         _, astream = streams
         try:
             async for item in astream(*args, **kwargs):
-                if isinstance(item, Prediction):
+                if isinstance(item, _prediction_type()):
                     return item
                 self._feed_item(item)
         except Exception:
@@ -474,7 +493,8 @@ def _speculation_execute_code(
                         t.end(timeout=config.timeout_s)
                     except Exception:
                         pass
-    else:
+    finisher: threading.Thread | None = None
+    if turn is not None:
         # Streaming turn is active (begun during generate_action). If it
         # produced no code deltas (cache hit, stream failure, or unfenced
         # output), top up with the full assembled block so the turn still
@@ -484,14 +504,17 @@ def _speculation_execute_code(
                 turn.feed(f"```repl\n{assembled}\n```\n")
             except Exception:
                 pass
-        # End the turn BEFORE real execution so the shadow has drained and
-        # queued every dispatch (the reader thread may still be processing
-        # tail messages when the streamed feed returns). Real exec then claims
-        # these queued specs; in-flight ones are awaited by the claim hooks.
-        try:
-            turn.end(timeout=config.timeout_s)
-        except Exception:
-            pass
+        # Let the shadow drain CONCURRENTLY with real execution: the claim
+        # hooks wait on in-flight speculations anyway, and late dispatches are
+        # claimable while the interpreter runs. The drain is joined (bounded)
+        # before eviction below, so no dispatch can race the turn reset.
+        finisher = threading.Thread(
+            target=_end_turn_quietly,
+            args=(turn, config.timeout_s),
+            daemon=True,
+            name="spec-turn-finisher",
+        )
+        finisher.start()
         self._active_stream_turn = None
 
     # --- install claiming hooks into the real tool path ---------------------
@@ -504,6 +527,17 @@ def _speculation_execute_code(
     try:
         return inner(repl, code, input_args)
     finally:
+        if finisher is not None:
+            finisher.join(timeout=config.timeout_s * 2)
+            if finisher.is_alive():
+                # the shadow missed its deadline: stop it so eviction cannot
+                # race a late dispatch (a persistent runner respawns next turn)
+                shadow = getattr(turn, "shadow", None)
+                if shadow is not None:
+                    try:
+                        shadow.abort("turn_end_timeout")
+                    except Exception:
+                        pass
         try:
             spec.end_turn()  # evict unclaimed, reset per-turn budget
         except Exception:
@@ -521,6 +555,8 @@ def enable_rlm_speculation(
     speculate_user_tools: bool = False,
     timeout_s: float = 5.0,
     streaming: bool = True,
+    persistent_shadow: bool = True,
+    latency_aware: bool = True,
 ) -> None:
     """Enable speculative execution on a :class:`~dspy.RLM` instance.
 
@@ -553,6 +589,11 @@ def enable_rlm_speculation(
         speculate_user_tools: Master switch for user-registered tools.
         timeout_s: How long to wait on the shadow pre-pass before falling back
             to real execution.
+        persistent_shadow: Keep one shadow subprocess warm across iterations
+            (default True) instead of spawning per iteration.
+        latency_aware: Track per-tool latency and let claims on in-flight
+            speculations hedge (run the real tool) when waiting would cost
+            more than duplicating the call (default True).
         streaming: Stream the ``code`` output during generation (default True).
             When False, use the Lazy/JIT one-shot shadow over the assembled code.
     """
@@ -567,10 +608,14 @@ def enable_rlm_speculation(
         speculate_user_tools=speculate_user_tools,
         timeout_s=timeout_s,
         streaming=streaming,
+        persistent_shadow=persistent_shadow,
+        latency_aware=latency_aware,
     )
     spec = Speculator(
         max_inflight=max_inflight,
         max_dispatches_per_turn=max_dispatches_per_turn,
+        persistent_shadow=persistent_shadow,
+        latency_aware=latency_aware,
     )
     _register_classifications(spec, config, tools)
     _register_speculator(spec)
