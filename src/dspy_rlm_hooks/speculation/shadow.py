@@ -390,7 +390,8 @@ def _register_segment_productions(
 
 def _plan_tainted_segment(
     conn,
-    tree: ast.AST,
+    source: str,
+    tree: ast.Module,
     ns: dict,
     hooks: set[str],
     seg_productions: dict[str, tuple],
@@ -407,7 +408,7 @@ def _plan_tainted_segment(
             tree_body=tree.body,
             spec_names=hooks,
             ns=ns,
-            tail=seg.source,  # the segment IS the complete (closed) text
+            tail=source,  # the segment IS the complete (closed) text
             plans=plans,
             chain_plans=chain_plans,
             metas=metas,
@@ -456,9 +457,20 @@ def _worker_exec(
         if tainted:
             for name in _bound_names(tree) - _comp_local_names(tree):
                 ns[name] = NonSpeculated("tainted:" + "+".join(tainted))
-            if seg_productions is not None and chains is not None:
+            if (
+                seg_productions is not None
+                and chains is not None
+                and chain_counter is not None
+            ):
                 _plan_tainted_segment(
-                    conn, tree, ns, hooks, seg_productions, chains, chain_counter
+                    conn,
+                    seg.source,
+                    tree,
+                    ns,
+                    hooks,
+                    seg_productions,
+                    chains,
+                    chain_counter,
                 )
             return
 
@@ -772,8 +784,11 @@ class ShadowRunner:
         self.join(5)
 
     def finish(self) -> None:
-        with self._send_lock:
-            self._conn.send(None)
+        try:
+            with self._send_lock:
+                self._conn.send(None)
+        except (BrokenPipeError, OSError):
+            pass  # already terminated (e.g. abort() raced ahead of finish())
 
     def join(self, timeout: float | None = None) -> bool:
         """Wait for the worker to finish; terminate it on timeout. Returns True
@@ -828,7 +843,12 @@ class ShadowRunner:
             self._done.set()
 
     def _dispatch(self, name: str, args: tuple, kwargs: dict) -> Any:
-        """Dispatch one shadow-recorded call; returns its claim key (or None)."""
+        """Dispatch one shadow-recorded call; returns its claim key (or None).
+
+        The call comes from an EXECUTED segment, i.e. the model's statement
+        closed: its speculation is ADOPTED so tail-shrink bet retraction can
+        no longer evict it before the real run claims it.
+        """
         if self.launcher is None:
             return None
         tool = self.registry.get(name) if self.registry else None
@@ -837,7 +857,9 @@ class ShadowRunner:
         if tool.gate_fn and not tool.gate_fn(args, kwargs):
             return None
         self.launcher.ensure_peeked(tool, args, kwargs, 1)
-        return spec_key(tool, args, kwargs)
+        key = spec_key(tool, args, kwargs)
+        self.store.adopt(key)
+        return key
 
     def _handle_plans(self, plans, chain_metas=()) -> None:
         if self.launcher is None:
@@ -876,17 +898,22 @@ class ShadowRunner:
         translated: list[ChainMeta] = []
         for m in chain_metas:
             deps: dict[str, Any] = {}
+            unwatchable = False
             for name, (ref_kind, ref) in m.deps.items():
                 if ref_kind == "key":
                     deps[name] = (ref_kind, plan_key_to_real.get(ref, ref))
                 elif ref_kind == "segkey":
                     real = self._segkey_to_real.get(ref)
                     if real is None:
-                        continue  # not dispatched yet: cannot watch it
+                        # the producer dispatch has not been processed yet:
+                        # drop the chain (a later peek re-plans it)
+                        unwatchable = True
+                        break
                     deps[name] = ("key", real)
                 else:
                     deps[name] = (ref_kind, ref)
-            translated.append(ChainMeta(cont_id=m.cont_id, tool=m.tool, deps=deps))
+            if not unwatchable:
+                translated.append(ChainMeta(cont_id=m.cont_id, tool=m.tool, deps=deps))
         with self._chain_lock:
             self._pending_chains = {m.cont_id: m for m in translated}
         for meta in translated:
