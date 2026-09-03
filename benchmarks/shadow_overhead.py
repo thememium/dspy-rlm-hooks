@@ -43,11 +43,10 @@ def _report(label: str, ms: list[float]) -> None:
     print(f"{label:44s} {statistics.median(ms):8.1f} ms  (n={len(ms)})")
 
 
-def bench_construction(ns: dict) -> float:
+def bench_construction(ns: dict) -> None:
     r = ShadowRunner(ns, {}, SpecStore(), {}, launcher=None, registry=None)
     r.finish()
     r.join(5)
-    return r
 
 
 def bench_decomposed(ns: dict) -> None:
@@ -59,7 +58,12 @@ def bench_decomposed(ns: dict) -> None:
     _report("  full pickle.dumps(ns)", _timeit(lambda: pickle.dumps(ns, -1)))
 
 
-STMT = ("import re", 'data = llm_query("summarize section {i}")', "clean = data.strip().lower()", "")
+STMT = (
+    "import re",
+    'data = llm_query("summarize section {i}")',
+    "clean = data.strip().lower()",
+    "",
+)
 
 
 def bench_turn_end(ns: dict, n_stmts: int = 30) -> None:
@@ -100,7 +104,9 @@ def main() -> None:
     print("\n== StreamTurn lifecycle (5 MB ctx) ==")
     bench_turn_end(ns5)
 
-    print("\n== Warm-worker upside: 20 iterations x construction above = per-RLM saving ==")
+    print(
+        "\n== Warm-worker upside: 20 iterations x construction above = per-RLM saving =="
+    )
 
 
 if __name__ == "__main__":
