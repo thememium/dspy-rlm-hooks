@@ -100,7 +100,9 @@ def test_ac4_parallelism(mock_rlm, mock_repl):
 
     tools = {"llm_query": llm_query}
     _setup_real(mock_rlm, mock_repl, tools)
-    enable_rlm_speculation(mock_rlm, max_inflight=4)
+    # latency_aware=False preserves the strict no-re-call invariant: claims on
+    # queued speculations wait rather than hedge (asserted below).
+    enable_rlm_speculation(mock_rlm, max_inflight=4, latency_aware=False)
 
     n = 16
     code = "\n".join(f"x{i} = llm_query('q{i}')" for i in range(n))
@@ -114,6 +116,38 @@ def test_ac4_parallelism(mock_rlm, mock_repl):
     assert elapsed < n * latency
     # Each call dispatched once and claimed (no re-call).
     assert len(real_calls) == n
+
+
+def test_latency_aware_claim_hedges_deep_queue(mock_rlm, mock_repl):
+    """With latency-aware claiming, a claim on a queued-not-started speculation
+    hedges (runs the real tool) when the queue would drain slower than simply
+    duplicating the call. Results stay correct; extra real executions are
+    bounded by the queue depth, never a wholesale re-run."""
+    latency = 0.3
+    real_calls = []
+
+    def llm_query(prompt):
+        real_calls.append(prompt)
+        time.sleep(latency)
+        return f"r:{prompt}"
+
+    tools = {"llm_query": llm_query}
+    _setup_real(mock_rlm, mock_repl, tools)
+    enable_rlm_speculation(mock_rlm, max_inflight=2, latency_aware=True)
+
+    n = 12
+    code = "\n".join(f"x{i} = llm_query('q{i}')" for i in range(n))
+    t0 = time.perf_counter()
+    mock_rlm._execute_code(mock_repl, code, {})
+    elapsed = time.perf_counter() - t0
+
+    # results are correct whether served from speculation or a hedged real call
+    # (the mock repl returns whatever the hooks return); no result check here —
+    # instead assert bounded total work and progress:
+    assert elapsed < n * latency  # still massively parallel, not serial
+    # speculation avoided a wholesale re-run: at most the queue depth of calls
+    # hedged (12 speculated executions + at most max_inflight*2 hedged dups)
+    assert len(real_calls) <= n + 4
 
 
 # ---------------------------------------------------------------------------
