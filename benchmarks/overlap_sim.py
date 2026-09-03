@@ -42,13 +42,14 @@ print(best)
 """
 
 
-def make_registry(calls: list) -> ToolRegistry:
+def make_registry() -> ToolRegistry:
     reg = ToolRegistry()
     lock = threading.Lock()
+    execs = [0]  # execution counter (survives lock attr restrictions)
 
     def llm_query(prompt: str) -> str:
         with lock:
-            calls.append(time.perf_counter())
+            execs[0] += 1
         time.sleep(TOOL_LATENCY_S)
         return f"result:{prompt}"
 
@@ -71,36 +72,38 @@ def stream_code(turn, code: str) -> None:
 
 
 def run_speculated() -> dict:
-    reg = make_registry([])
+    reg = make_registry()
     session = SpecSession(reg)
     turn = session.begin_stream_turn({"context": "a\n\nb\n\nc"}, {}, peek=True)
     t0 = time.perf_counter()
     stream_code(turn, CODE)
-    t_streamed = time.perf_counter() - t0
+    t_stream = time.perf_counter() - t0
     turn.end(timeout=5.0)
-    t_gen_end = time.perf_counter()
+    t_drained = time.perf_counter() - t0
+    drain = t_drained - t_stream
 
     hooks = session.real_hooks()
-    t0 = time.perf_counter()
+    tc = time.perf_counter()
     hooks["llm_query"](prompt="score: a")
-    t_real = time.perf_counter() - t0
+    claim_wait = time.perf_counter() - tc
+    total = (tc - t0) + claim_wait  # stream + drain + claim
     session.end_turn()
     session.close()
 
     hits = sum(1 for e in session.bus.history if e[0] == "claim_hit")
     misses = sum(1 for e in session.bus.history if e[0] == "claim_miss")
     return {
-        "stream_s": t_streamed,
-        "gen_end_to_real_done_s": t_real,
-        "total_s": t_gen_end - t0 + t_real,
+        "stream_s": t_stream,
+        "drain_s": drain,
+        "total_s": total,
         "hits": hits,
         "misses": misses,
-        "first_call_wait_s": t_real,
+        "claim_wait_s": claim_wait,
     }
 
 
 def run_baseline() -> float:
-    reg = make_registry([])
+    reg = make_registry()
     session = SpecSession(reg)
     hooks = session.baseline_hooks()
     t0 = time.perf_counter()
@@ -113,12 +116,13 @@ def run_baseline() -> float:
 def main() -> None:
     base = run_baseline()
     spec = run_speculated()
-    hidden_ms = (base - spec["first_call_wait_s"]) * 1000
+    hidden_ms = (base - spec["claim_wait_s"]) * 1000
     print(f"baseline real call (no speculation):   {base * 1000:8.1f} ms")
     print(f"speculated: streamed+drain+claim:      {spec['total_s'] * 1000:8.1f} ms")
     print(f"  stream window:                       {spec['stream_s'] * 1000:8.1f} ms")
+    print(f"  drain:                               {spec['drain_s'] * 1000:8.1f} ms")
     print(
-        f"  real-path claim wait:                {spec['first_call_wait_s'] * 1000:8.1f} ms"
+        f"  real-path claim wait:                {spec['claim_wait_s'] * 1000:8.1f} ms"
     )
     print(f"  tool latency hidden under streaming: {hidden_ms:8.1f} ms")
     print(f"  claim hits/misses:                   {spec['hits']}/{spec['misses']}")
