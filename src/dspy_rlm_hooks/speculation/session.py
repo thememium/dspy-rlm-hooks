@@ -526,13 +526,27 @@ class SpecSession:
             shadow = self._new_runner(host_locals, safe_builtins)
             return StreamTurn(StreamSegmenter(), shadow, peek=peek)
         # lazy start: spawn/reuse the runner only when a speculatable call
-        # actually appears in the stream
+        # actually appears in the stream. The (single-flight) acquire is
+        # PREFETCHED on a background thread so the ~70ms process boot overlaps
+        # with the first streamed tokens instead of stalling a mid-stream peek.
+        box: dict[str, ShadowRunner] = {}
+        box_lock = threading.Lock()
+
+        def factory() -> ShadowRunner:
+            with box_lock:
+                if "runner" not in box:
+                    box["runner"] = self._acquire_runner(host_locals, safe_builtins)
+                return box["runner"]
+
+        threading.Thread(
+            target=factory, daemon=True, name="spec-shadow-prefetch"
+        ).start()
         spec_names = self._spec_names()
         return StreamTurn(
             StreamSegmenter(),
             shadow=None,
             peek=peek,
-            shadow_factory=lambda: self._acquire_runner(host_locals, safe_builtins),
+            shadow_factory=factory,
             spec_names=spec_names,
         )
 
