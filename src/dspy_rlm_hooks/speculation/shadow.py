@@ -35,8 +35,21 @@ from types import FunctionType
 from typing import Any
 
 from dspy_rlm_hooks.speculation.store import SpecStore
-from dspy_rlm_hooks.speculation.streaming import Segment, plan_peeks
-from dspy_rlm_hooks.speculation.tool import NonSpeculated, contains_nonspec, spec_key
+from dspy_rlm_hooks.speculation.streaming import (
+    ChainMeta,
+    ChainPlan,
+    Segment,
+    _ContCounter,
+    _plan_body,
+    plan_peeks_with_chains,
+    safe_eval,
+)
+from dspy_rlm_hooks.speculation.tool import (
+    NonSpeculated,
+    canonical_hash,
+    contains_nonspec,
+    spec_key,
+)
 
 STMT_WALL_BUDGET_S = 2.0  # runaway guard: max wall time per shadow statement
 
@@ -280,13 +293,16 @@ def _shadow_worker(conn, parent_conn, payload: dict) -> None:
     on every ``("reset",)`` so per-turn state never leaks across turns.
     """
     parent_conn.close()
-    seed: dict = load_ns(payload["ns_seed"])
+    seed: dict = payload["ns_seed"]  # classified bytes; re-loaded per turn
     spec_names: set[str] = payload["spec_names"]
     taint_skip: bool = payload["taint_skip"]
     budget: float = payload["budget"]
 
     def fresh_ns() -> dict:
-        ns = copy.deepcopy(seed)
+        # re-load from bytes: every turn gets a fresh independent copy of the
+        # seed (same isolation as a per-turn spawn), with no deepcopy of
+        # Opaque sentinels (they cannot be copied and must pass through)
+        ns = load_ns(seed)
         ns["__builtins__"] = shadow_builtins(dict(_builtins.__dict__))
         ns.setdefault("__name__", "__main__")  # class stmts need it
         # recording hooks live in the worker so they share its pipe end
@@ -299,6 +315,12 @@ def _shadow_worker(conn, parent_conn, payload: dict) -> None:
         return ns
 
     ns = fresh_ns()
+    chains: dict[int, ChainPlan] = {}  # cont_id -> pending continuation
+    chain_counter = _ContCounter()
+    # names bound to a hooked call by an EXECUTED segment this turn: the
+    # producer's speculation is already dispatched, so later tail peeks can
+    # chain off it even though the producer statement left the tail
+    seg_productions: dict[str, tuple] = {}
     try:
         while True:
             msg = conn.recv()
@@ -306,20 +328,111 @@ def _shadow_worker(conn, parent_conn, payload: dict) -> None:
                 break
             if isinstance(msg, tuple) and msg[0] == "reset":
                 ns = fresh_ns()
+                chains = {}
+                chain_counter = _ContCounter()
+                seg_productions = {}
             elif isinstance(msg, tuple) and msg[0] == "peek":
-                _worker_peek(conn, msg[1], spec_names, ns)
+                _worker_peek(conn, msg[1], spec_names, ns, chains, seg_productions)
             elif isinstance(msg, tuple) and msg[0] == "end_turn":
                 conn.send(("turn_ended",))
+            elif isinstance(msg, tuple) and msg[0] == "fire_chain":
+                _worker_fire_chain(conn, msg[1], msg[2], chains, ns)
             else:
-                _worker_exec(conn, msg, ns, spec_names, taint_skip, budget)
+                _worker_exec(
+                    conn,
+                    msg,
+                    ns,
+                    spec_names,
+                    taint_skip,
+                    budget,
+                    seg_productions,
+                    chains,
+                    chain_counter,
+                )
     except (EOFError, OSError):
         pass
     finally:
         conn.close()
 
 
+def _register_segment_productions(
+    seg: Segment, ns: dict, hooks: set[str], seg_productions: dict[str, tuple]
+) -> None:
+    """After a segment executes, remember which names were bound to a hooked
+    call (``doc = fetch(..)``): later tail peeks chain consumers off them.
+
+    The producer identity is a RAW-material hash ((tool, canonical_hash) of the
+    call as written) that the parent maps to the real claim key it dispatched.
+    """
+    try:
+        tree = ast.parse(seg.source)
+    except SyntaxError:
+        return
+    for stmt in tree.body:
+        if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
+            continue
+        target = stmt.targets[0]
+        if not isinstance(target, ast.Name) or not isinstance(stmt.value, ast.Call):
+            continue
+        call = stmt.value
+        if not (isinstance(call.func, ast.Name) and call.func.id in hooks):
+            continue
+        try:
+            args = tuple(safe_eval(a, ns) for a in call.args)
+            kwargs = {k.arg: safe_eval(k.value, ns) for k in call.keywords if k.arg}
+        except Exception:
+            continue  # args not statically resolvable: no production recorded
+        seg_productions[target.id] = (
+            "segkey",
+            (call.func.id, canonical_hash(call.func.id, args, kwargs)),
+        )
+
+
+def _plan_tainted_segment(
+    conn,
+    tree: ast.AST,
+    ns: dict,
+    hooks: set[str],
+    seg_productions: dict[str, tuple],
+    chains: dict[int, ChainPlan],
+    counter: "_ContCounter",
+) -> None:
+    """Plan a taint-skipped segment's hooked calls: concrete ones dispatch
+    now, marker-reading ones become chained continuations."""
+    try:
+        plans: list = []
+        chain_plans: list = []
+        metas: list = []
+        _plan_body(
+            tree_body=tree.body,
+            spec_names=hooks,
+            ns=ns,
+            tail="",
+            plans=plans,
+            chain_plans=chain_plans,
+            metas=metas,
+            productions=seg_productions,
+            counter=counter,
+            dep_capable=set(seg_productions),
+        )
+    except Exception:
+        return
+    for cp in chain_plans:
+        chains[cp.cont_id] = cp
+    if plans or metas:
+        conn.send(("plans", plans, metas))
+
+
 def _worker_exec(
-    conn, seg: Segment, ns: dict, hooks: set[str], taint_skip: bool, budget: float
+    conn,
+    seg: Segment,
+    ns: dict,
+    hooks: set[str],
+    taint_skip: bool,
+    budget: float,
+    seg_productions: dict[str, tuple] | None = None,
+    chains: dict[int, ChainPlan] | None = None,
+    chain_counter: "_ContCounter | None" = None,
 ) -> None:
     try:
         tree = ast.parse(seg.source)
@@ -334,12 +447,19 @@ def _worker_exec(
             return
     reads = _read_names(tree)
     # a statement reading a NonSpeculated marker is skipped and its targets
-    # poisoned — taint flows by value instead of killing the turn
+    # poisoned — taint flows by value instead of killing the turn. The
+    # statement's own hooked calls become CHAINED continuations: they fire
+    # when the producers' speculations resolve (pipelining the dataflow chain
+    # under the still-streaming output), and concrete calls still dispatch.
     if taint_skip:
         tainted = sorted(n for n in reads if contains_nonspec(ns.get(n)))
         if tainted:
             for name in _bound_names(tree) - _comp_local_names(tree):
                 ns[name] = NonSpeculated("tainted:" + "+".join(tainted))
+            if seg_productions is not None and chains is not None:
+                _plan_tainted_segment(
+                    conn, tree, ns, hooks, seg_productions, chains, chain_counter
+                )
             return
 
     # Runaway guard: SIGALRM raises ShadowAborted in this process when a
@@ -353,6 +473,8 @@ def _worker_exec(
     signal.setitimer(signal.ITIMER_REAL, budget)
     try:
         exec(compile(tree, "<shadow>", "exec"), ns, ns)
+        if seg_productions is not None:
+            _register_segment_productions(seg, ns, hooks, seg_productions)
         conn.send(("executed",))
     except BaseException as e:
         conn.send(("abort", f"{type(e).__name__}: {e}"))
@@ -361,12 +483,54 @@ def _worker_exec(
         signal.signal(signal.SIGALRM, old)
 
 
-def _worker_peek(conn, tail: str, spec_names: set[str], ns: dict) -> None:
+def _worker_peek(
+    conn,
+    tail: str,
+    spec_names: set[str],
+    ns: dict,
+    chains: dict[int, ChainPlan],
+    seg_productions: dict[str, tuple],
+) -> None:
     try:
-        plans = plan_peeks(tail, spec_names, ns)
+        plans, chain_plans, metas = plan_peeks_with_chains(
+            tail, spec_names, ns, segment_productions=seg_productions
+        )
     except Exception:
-        plans = []
-    conn.send(("plans", plans))
+        plans, chain_plans, metas = [], [], []
+    # the newest plan generation replaces the chain table entirely; a chain
+    # dropped here is re-planned by the next generation, and the parent fires
+    # re-planned chains immediately when their deps are already resolved
+    chains.clear()
+    for cp in chain_plans:
+        chains[cp.cont_id] = cp
+    conn.send(("plans", plans, metas))
+
+
+def _worker_fire_chain(
+    conn, cont_id: int, dep_values: dict, chains: dict[int, ChainPlan], ns: dict
+) -> None:
+    """Evaluate a chained call's args against the resolved dep values and
+    dispatch it through the normal record path (same dedup/adopt machinery)."""
+    chain = chains.get(cont_id)
+    if chain is None:
+        return
+    env = dict(ns)
+    for name, blob in dep_values.items():
+        try:
+            env[name] = pickle.loads(blob)
+        except Exception:
+            return  # a dep value that cannot cross the pipe: drop the chain
+    try:
+        args: list = []
+        for kind, payload in chain.arg_specs:
+            args.append(payload if kind == "const" else safe_eval(payload, env))
+        kwargs: dict = {}
+        for name, (kind, payload) in chain.kwarg_specs.items():
+            kwargs[name] = payload if kind == "const" else safe_eval(payload, env)
+    except Exception:
+        return  # fire-time evaluation failed: the real run executes the call
+    # cont_id rides along so the parent can map this chain to its claim key
+    conn.send(("tool", chain.tool, tuple(args), kwargs, cont_id))
 
 
 # =============================================================================
@@ -407,6 +571,15 @@ class ShadowRunner:
         self._done = threading.Event()
         self._turn_ended = threading.Event()
         self._turn_open = False  # worker is between reset and end_turn
+        # chained-continuation state (see plan_peeks_with_chains)
+        self._chain_lock = threading.Lock()
+        self._pending_chains: dict[int, ChainMeta] = {}
+        self._cont_keys: dict[int, Any] = {}  # cont_id -> realized claim key
+        self._segkey_to_real: dict[tuple, Any] = {}  # raw-material id -> claim key
+        self._chain_ready: dict[int, set[str]] = {}  # cont_id -> satisfied deps
+        self._dep_values: dict[int, dict[str, Any]] = {}  # cont_id -> dep results
+        self._send_lock = threading.Lock()  # the pipe is not thread-safe
+        self._closed = False
         # classified seed — kept so a crashed worker can respawn without
         # re-serializing the host namespace
         self._seed = classify_ns(real_locals)
@@ -417,6 +590,7 @@ class ShadowRunner:
     # -- process lifecycle ----------------------------------------------------
     def _spawn(self) -> None:
         """Start (or restart) the worker subprocess from the classified seed."""
+        self._closed = False
         ctx = _mp_context()
         self._parent_conn, child_conn = ctx.Pipe()
         payload = {
@@ -440,6 +614,99 @@ class ShadowRunner:
             target=self._read, daemon=True, name="shadow-reader"
         )
         self._reader.start()
+        if (
+            self.launcher is not None
+            and getattr(self.launcher, "bus", None) is not None
+        ):
+            self.launcher.bus.subscribe(self._on_bus_event)
+
+    # -- chained continuations -------------------------------------------------
+    def _on_bus_event(self, kind: str, data: dict) -> None:
+        """Watch speculation resolutions and fire continuations whose
+        dependencies are satisfied."""
+        if self._closed or kind != "ready":
+            return
+        key = data.get("key")
+        spec = data.get("spec")
+        try:
+            self._fire_chains_for_key(key, spec)
+        except Exception:
+            pass  # continuation fires must never break dispatch
+
+    def _chain_dep_matches(self, meta: ChainMeta, key: Any) -> bool:
+        """True when any dep of the chain refers to the given claim key."""
+        for _name, (ref_kind, ref) in meta.deps.items():
+            if ref_kind == "key" and ref == key:
+                return True
+            if ref_kind == "cont" and self._cont_keys.get(ref) == key:
+                return True
+        return False
+
+    def _fire_chains_for_key(self, key: Any, spec: Any) -> None:
+        """Record a producer resolution; fire every chain whose deps are now
+        all satisfied. A FAILED producer drops its dependent chains (the real
+        run will surface the same error through its own claim)."""
+        if spec is not None and spec.error is not None:
+            with self._chain_lock:
+                self._pending_chains = {
+                    cid: m
+                    for cid, m in self._pending_chains.items()
+                    if not self._chain_dep_matches(m, key)
+                }
+            return
+        value = spec._result if spec is not None else None
+        to_fire: list[tuple[int, dict[str, Any]]] = []
+        with self._chain_lock:
+            for cont_id, meta in self._pending_chains.items():
+                if not self._chain_dep_matches(meta, key):
+                    continue
+                values = self._dep_values.setdefault(cont_id, {})
+                for name, (ref_kind, ref) in meta.deps.items():
+                    if name in values:
+                        continue
+                    if (ref_kind == "key" and ref == key) or (
+                        ref_kind == "cont" and self._cont_keys.get(ref) == key
+                    ):
+                        values[name] = value
+                    elif ref_kind == "key":
+                        # dep already ready from an earlier resolution
+                        prior = self._result_for_key(ref)
+                        if prior is not None or self._key_resolved(ref):
+                            values[name] = prior
+                if meta.deps and all(n in values for n in meta.deps):
+                    to_fire.append((cont_id, dict(values)))
+        for cont_id, values in to_fire:
+            self._send_chain_fire(cont_id, values)
+
+    def _key_resolved(self, key: Any) -> bool:
+        """True when some speculation for the key resolved (value may be None)."""
+        with self.store._lock:
+            for spec in self.store._q.get(key, ()):
+                if spec.state in ("ready", "claimed"):
+                    return True
+        return False
+
+    def _result_for_key(self, key: Any) -> Any:
+        """Best-effort resolved value for a key (for deps already ready when a
+        chain registers later)."""
+        with self.store._lock:
+            for spec in self.store._q.get(key, ()):
+                if spec.state in ("ready", "claimed") and spec.error is None:
+                    return spec._result
+        return None
+
+    def _send_chain_fire(self, cont_id: int, values: dict[str, Any]) -> None:
+        blobs: dict[str, bytes] = {}
+        for name, value in values.items():
+            try:
+                blobs[name] = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+            except Exception:
+                return  # unpicklable dep result: drop the chain
+        try:
+            with self._send_lock:
+                self._conn.send(("fire_chain", cont_id, blobs))
+        except Exception:
+            pass
 
     @property
     def is_alive(self) -> bool:
@@ -453,7 +720,8 @@ class ShadowRunner:
 
     # -- producer side --------------------------------------------------------
     def feed(self, seg: Segment) -> None:
-        self._conn.send(seg)
+        with self._send_lock:
+            self._conn.send(seg)
 
     def feed_peek(self, tail: str) -> None:
         """Queue a peek over the current unclosed tail. Runs in the worker AFTER
@@ -470,8 +738,15 @@ class ShadowRunner:
         self.executed = 0
         self.aborted = None
         self._last_peek_tally = {}
+        with self._chain_lock:
+            self._pending_chains = {}
+            self._cont_keys = {}
+            self._segkey_to_real = {}
+            self._chain_ready = {}
+            self._dep_values = {}
         self._turn_ended.clear()
-        self._conn.send(("reset",))
+        with self._send_lock:
+            self._conn.send(("reset",))
         self._turn_open = True
 
     def end_turn(self, timeout: float | None = None) -> bool:
@@ -483,19 +758,22 @@ class ShadowRunner:
         if not self._proc.is_alive():
             return False
         try:
-            self._conn.send(("end_turn",))
+            with self._send_lock:
+                self._conn.send(("end_turn",))
         except (OSError, BrokenPipeError):
             return False
         return self._turn_ended.wait(timeout)
 
     def shutdown(self) -> None:
         """Terminate a persistent runner gracefully (session close)."""
+        self._closed = True
         self._turn_open = False
         self.finish()
         self.join(5)
 
     def finish(self) -> None:
-        self._conn.send(None)
+        with self._send_lock:
+            self._conn.send(None)
 
     def join(self, timeout: float | None = None) -> bool:
         """Wait for the worker to finish; terminate it on timeout. Returns True
@@ -509,9 +787,11 @@ class ShadowRunner:
         return True
 
     def abort(self, why: str = "external") -> None:
+        self._closed = True
         self.aborted = why
         if self._proc.is_alive():
             self._proc.terminate()
+            self._proc.join(2)  # deterministic death for respawn checks
 
     # -- reader ---------------------------------------------------------------
     def _read(self) -> None:
@@ -522,11 +802,18 @@ class ShadowRunner:
                     break
                 kind = msg[0]
                 if kind == "tool":
-                    _, name, args, kwargs = msg
+                    _, name, args, kwargs = msg[:4]
+                    cont_id = msg[4] if len(msg) > 4 else None
                     self.predicted.append((name, args))
-                    self._dispatch(name, args, kwargs)
+                    key = self._dispatch(name, args, kwargs)
+                    if key is not None:
+                        seg_id = (name, canonical_hash(name, args, kwargs))
+                        with self._chain_lock:
+                            self._segkey_to_real[seg_id] = key
+                            if cont_id is not None:
+                                self._cont_keys[cont_id] = key
                 elif kind == "plans":
-                    self._handle_plans(msg[1])
+                    self._handle_plans(msg[1], msg[2] if len(msg) > 2 else ())
                 elif kind == "executed":
                     self.executed += 1
                 elif kind == "abort":
@@ -540,17 +827,19 @@ class ShadowRunner:
         finally:
             self._done.set()
 
-    def _dispatch(self, name: str, args: tuple, kwargs: dict) -> None:
+    def _dispatch(self, name: str, args: tuple, kwargs: dict) -> Any:
+        """Dispatch one shadow-recorded call; returns its claim key (or None)."""
         if self.launcher is None:
-            return
+            return None
         tool = self.registry.get(name) if self.registry else None
         if tool is None or not tool.speculatable:
-            return
+            return None
         if tool.gate_fn and not tool.gate_fn(args, kwargs):
-            return
+            return None
         self.launcher.ensure_peeked(tool, args, kwargs, 1)
+        return spec_key(tool, args, kwargs)
 
-    def _handle_plans(self, plans) -> None:
+    def _handle_plans(self, plans, chain_metas=()) -> None:
         if self.launcher is None:
             return
         tally = Counter(
@@ -573,6 +862,49 @@ class ShadowRunner:
             if keep < old_n:
                 self.store.evict_unadopted_peeks(key, keep, "peek-retracted")
         self._last_peek_tally = new_tally
+
+        # CHAIN REGISTRATION: the newest generation replaces pending chains.
+        # Worker-side Plan keys hash raw args; real claim keys hash the
+        # signature-bound material — translate before watching.
+        plan_key_to_real: dict = {}
+        for p in plans:
+            if p.key is None:
+                continue
+            tool = self.registry.get(p.tool) if self.registry else None
+            if tool is not None:
+                plan_key_to_real[p.key] = spec_key(tool, p.args, p.kwargs)
+        translated: list[ChainMeta] = []
+        for m in chain_metas:
+            deps: dict[str, Any] = {}
+            for name, (ref_kind, ref) in m.deps.items():
+                if ref_kind == "key":
+                    deps[name] = (ref_kind, plan_key_to_real.get(ref, ref))
+                elif ref_kind == "segkey":
+                    real = self._segkey_to_real.get(ref)
+                    if real is None:
+                        continue  # not dispatched yet: cannot watch it
+                    deps[name] = ("key", real)
+                else:
+                    deps[name] = (ref_kind, ref)
+            translated.append(ChainMeta(cont_id=m.cont_id, tool=m.tool, deps=deps))
+        with self._chain_lock:
+            self._pending_chains = {m.cont_id: m for m in translated}
+        for meta in translated:
+            for name, (ref_kind, ref) in meta.deps.items():
+                if ref_kind != "key":
+                    continue
+                if self._key_resolved(ref):
+                    spec = self._spec_for_key(ref)
+                    if spec is not None:
+                        self._fire_chains_for_key(ref, spec)
+                        break
+
+    def _spec_for_key(self, key: Any) -> Any:
+        with self.store._lock:
+            for spec in self.store._q.get(key, ()):
+                if spec.state in ("ready", "claimed"):
+                    return spec
+        return None
 
 
 def _read_names(tree: ast.AST) -> set[str]:

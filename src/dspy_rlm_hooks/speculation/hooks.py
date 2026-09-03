@@ -125,7 +125,11 @@ def _hedge(
 
 
 def _claim_or_run(
-    tool: ToolSpec, args: tuple, kwargs: dict, store: SpecStore, bus: Any,
+    tool: ToolSpec,
+    args: tuple,
+    kwargs: dict,
+    store: SpecStore,
+    bus: Any,
     launcher: Any = None,
 ) -> Any:
     """Claim a speculation for one call; on hit wait for and return its result,

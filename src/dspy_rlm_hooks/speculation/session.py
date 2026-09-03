@@ -59,16 +59,32 @@ def _bind_call(fn: Any, args: tuple, kwargs: dict) -> dict:
 
 
 class EventBus:
-    """Minimal observable event bus: ``emit(kind, **data)`` records to history."""
+    """Minimal observable event bus: ``emit(kind, **data)`` records to history
+    and notifies subscribers (used by the shadow runner to watch speculation
+    resolutions for chained continuations)."""
 
     def __init__(self) -> None:
         self.history: list[tuple[str, dict]] = []
         self.record = True
+        self._subs: list[Callable[[str, dict], None]] = []
+        self._sub_lock = threading.Lock()
+
+    def subscribe(self, fn: Callable[[str, dict], None]) -> None:
+        """Register a callback invoked as ``fn(kind, data)`` on every emit."""
+        with self._sub_lock:
+            self._subs.append(fn)
 
     def emit(self, kind: str, **data: Any) -> tuple[str, dict]:
         ev = (kind, data)
         if self.record:
             self.history.append(ev)
+        with self._sub_lock:
+            subs = list(self._subs)
+        for fn in subs:
+            try:
+                fn(kind, data)
+            except Exception:
+                pass  # subscriber errors must never break dispatch
         return ev
 
 
@@ -306,7 +322,7 @@ class Launcher:
                     )
             spec.done.set()
             if spec.state == "ready":
-                self.bus.emit("ready", key=key, seq=spec.seq)
+                self.bus.emit("ready", key=key, seq=spec.seq, spec=spec)
 
         with self._queued_lock:
             self._queued += 1
@@ -370,7 +386,7 @@ class StreamTurn:
     _pending: list[Segment] = field(default_factory=list)
 
     @property
-    def _hook_names(self) -> set[str]:
+    def _hook_names(self) -> set[str] | frozenset[str]:
         """Names the lazy trigger watches. Falls back to the shadow's hook
         names when the turn was constructed with an eager shadow."""
         if self.spec_names:
@@ -420,7 +436,7 @@ class StreamTurn:
             self._feed_segment(seg)
         if self.shadow is None:
             return  # nothing speculatable streamed: the shadow never started
-        if self.shadow.persistent:
+        if self.shadow.persistent is True:  # real bool; mocks fall through to legacy
             self.shadow.end_turn(timeout)
         else:
             self.shadow.finish()
