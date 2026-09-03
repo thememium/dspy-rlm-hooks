@@ -16,8 +16,9 @@ import asyncio
 import inspect
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from dspy_rlm_hooks.speculation.budget import Budget
@@ -34,7 +35,7 @@ from dspy_rlm_hooks.speculation.hooks import (
 )
 from dspy_rlm_hooks.speculation.shadow import ShadowRunner
 from dspy_rlm_hooks.speculation.store import SpecStore, Speculation
-from dspy_rlm_hooks.speculation.streaming import StreamSegmenter
+from dspy_rlm_hooks.speculation.streaming import Segment, StreamSegmenter
 from dspy_rlm_hooks.speculation.tool import ToolSpec, _is_async_callable, spec_key
 
 
@@ -90,6 +91,38 @@ class ToolRegistry:
         return list(self._tools)
 
 
+class LatencyStats:
+    """Thread-safe per-tool EWMA of speculative execution latency (ms).
+
+    Feeds latency-aware claiming: when the real interpreter reaches a call
+    whose speculation is still in flight, the estimated remaining wait is
+    compared against the cost of simply running the tool.
+    """
+
+    def __init__(self, alpha: float = 0.3) -> None:
+        self.alpha = alpha
+        self._ewma_ms: dict[str, float] = {}
+        self._samples: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    def record(self, name: str, ms: float) -> None:
+        with self._lock:
+            prev = self._ewma_ms.get(name)
+            self._ewma_ms[name] = (
+                ms if prev is None else prev + self.alpha * (ms - prev)
+            )
+            self._samples[name] = self._samples.get(name, 0) + 1
+
+    def ewma_ms(self, name: str, fallback_ms: float) -> float:
+        with self._lock:
+            v = self._ewma_ms.get(name)
+        return v if v is not None else fallback_ms
+
+    def samples(self, name: str) -> int:
+        with self._lock:
+            return self._samples.get(name, 0)
+
+
 class Launcher:
     """Dispatches speculative executions on a thread pool.
 
@@ -97,6 +130,10 @@ class Launcher:
     reserves a per-turn slot via ``budget.try_dispatch()`` (hard deny when the
     turn cap is hit). Async tools run on one shared background asyncio loop so
     loop-bound clients stay valid across calls.
+
+    ``latency_aware=True`` records a per-tool latency EWMA and tracks the
+    pending-dispatch depth so claim hooks can decide between waiting for an
+    in-flight speculation and hedging (running the real tool).
     """
 
     def __init__(
@@ -104,10 +141,16 @@ class Launcher:
         store: SpecStore,
         bus: EventBus | None = None,
         budget: Budget | None = None,
+        latency_aware: bool = True,
     ) -> None:
         self.store = store
         self.bus = bus or EventBus()
         self.budget = budget or Budget()
+        self.latency_aware = latency_aware
+        self.latency = LatencyStats()
+        self.max_claim_wait_s: float = 30.0  # hard ceiling on claim waits
+        self._queued = 0  # dispatches accepted but not yet started
+        self._queued_lock = threading.Lock()
         self._seq = 0
         self._seq_lock = threading.Lock()
         self._pool = ThreadPoolExecutor(
@@ -115,6 +158,14 @@ class Launcher:
         )
         self._aloop: asyncio.AbstractEventLoop | None = None
         self._aloop_lock = threading.Lock()
+
+    # -- latency-aware claim support ------------------------------------------
+    def queued_depth(self) -> int:
+        with self._queued_lock:
+            return self._queued
+
+    def ewma_ms(self, tool_name: str, fallback_ms: float) -> float:
+        return self.latency.ewma_ms(tool_name, fallback_ms)
 
     def loop(self) -> asyncio.AbstractEventLoop:
         """One shared background event loop for every async tool."""
@@ -215,6 +266,8 @@ class Launcher:
         self.bus.emit("dispatch", key=key, seq=spec.seq, tool=tool.name, source=source)
 
         def run() -> None:
+            with self._queued_lock:
+                self._queued -= 1
             if spec.state == "evicted":
                 spec.done.set()
                 return
@@ -245,11 +298,18 @@ class Launcher:
             except BaseException as e:  # surfaced at claim/force point
                 spec.error = e
                 spec.state = "failed" if spec.state != "evicted" else "evicted"
-            spec.resolved_at = time.monotonic()
+            finally:
+                spec.resolved_at = time.monotonic()
+                if self.latency_aware and spec.dispatched_at is not None:
+                    self.latency.record(
+                        tool.name, (spec.resolved_at - spec.dispatched_at) * 1000
+                    )
             spec.done.set()
             if spec.state == "ready":
                 self.bus.emit("ready", key=key, seq=spec.seq)
 
+        with self._queued_lock:
+            self._queued += 1
         self._pool.submit(run)
         return spec
 
@@ -293,21 +353,57 @@ def _serve_loop(loop: asyncio.AbstractEventLoop) -> None:
 
 @dataclass
 class StreamTurn:
-    """One streaming turn's segmenter + shadow, bound to a host namespace."""
+    """One streaming turn's segmenter + shadow, bound to a host namespace.
+
+    The shadow starts LAZILY: nothing spawns until the first closed statement
+    (or peek-worthy tail) actually mentions a speculatable tool, so call-free
+    iterations (e.g. the final-answer turn) pay zero shadow cost. Segments fed
+    before the shadow exists are buffered and flushed in order on start.
+    """
 
     segmenter: StreamSegmenter
-    shadow: ShadowRunner
+    shadow: ShadowRunner | None = None
     peek: bool = True
+    shadow_factory: Callable[[], ShadowRunner] | None = None
+    spec_names: frozenset[str] = frozenset()
     _last_tail: str = ""
+    _pending: list[Segment] = field(default_factory=list)
+
+    @property
+    def _hook_names(self) -> set[str]:
+        """Names the lazy trigger watches. Falls back to the shadow's hook
+        names when the turn was constructed with an eager shadow."""
+        if self.spec_names:
+            return self.spec_names
+        return set(self.shadow.hooks) if self.shadow is not None else set()
+
+    def _acquire(self) -> ShadowRunner:
+        """Start (or reuse) the shadow, flushing any buffered segments first."""
+        if self.shadow is None:
+            if self.shadow_factory is None:
+                raise RuntimeError("StreamTurn has neither shadow nor factory")
+            self.shadow = self.shadow_factory()
+            for seg in self._pending:
+                self.shadow.feed(seg)
+            self._pending.clear()
+        return self.shadow
+
+    def _feed_segment(self, seg: Segment) -> None:
+        if self.shadow is not None:
+            self.shadow.feed(seg)
+        elif seg.has_call and any(name in seg.source for name in self._hook_names):
+            self._acquire().feed(seg)
+        else:
+            self._pending.append(seg)
 
     def feed(self, delta: str) -> None:
         for seg in self.segmenter.feed(delta):
-            self.shadow.feed(seg)
+            self._feed_segment(seg)
         if self.peek and "\n" in delta:
             tail = self.segmenter.pending_tail()
             if tail.strip() and tail != self._last_tail and self._peek_worthwhile(tail):
                 self._last_tail = tail
-                self.shadow.feed_peek(tail)
+                self._acquire().feed_peek(tail)
 
     def _peek_worthwhile(self, tail: str) -> bool:
         if len(tail) > 12_000:
@@ -315,16 +411,21 @@ class StreamTurn:
         changed = (
             tail[len(self._last_tail) :] if tail.startswith(self._last_tail) else tail
         )
-        if any(name in changed for name in self.shadow.hooks):
+        if any(name in changed for name in self._hook_names):
             return True
-        return bool(self.shadow._last_peek_tally)
+        return self.shadow is not None and bool(self.shadow._last_peek_tally)
 
     def end(self, timeout: float = 600) -> None:
         for seg in self.segmenter.finish():
-            self.shadow.feed(seg)
-        self.shadow.finish()
-        self.shadow.join(timeout)
-        self.shadow.abort("turn_end")
+            self._feed_segment(seg)
+        if self.shadow is None:
+            return  # nothing speculatable streamed: the shadow never started
+        if self.shadow.persistent:
+            self.shadow.end_turn(timeout)
+        else:
+            self.shadow.finish()
+            self.shadow.join(timeout)
+            self.shadow.abort("turn_end")
 
 
 class SpecSession:
@@ -337,10 +438,15 @@ class SpecSession:
         max_inflight: int = 8,
         max_dispatches_per_turn: int = 2048,
         taint_skip: bool = True,
+        persistent_shadow: bool = True,
+        latency_aware: bool = True,
     ) -> None:
         self.reg = registry
         self.bus = bus or EventBus()
         self.taint_skip = taint_skip
+        self.persistent_shadow = persistent_shadow
+        self.latency_aware = latency_aware
+        self._warm_runner: ShadowRunner | None = None
         self.store = SpecStore()
         self.launcher = Launcher(
             self.store,
@@ -349,7 +455,44 @@ class SpecSession:
                 max_inflight=max_inflight,
                 max_dispatches_per_turn=max_dispatches_per_turn,
             ),
+            latency_aware=latency_aware,
         )
+
+    def _spec_names(self) -> frozenset[str]:
+        """Names of speculatable tools — the lazy-start trigger."""
+        return frozenset(
+            name
+            for name in self.reg.names()
+            if (tool := self.reg.get(name)) is not None and tool.speculatable
+        )
+
+    def _new_runner(self, host_locals: dict, safe_builtins: dict) -> ShadowRunner:
+        return ShadowRunner(
+            host_locals,
+            make_shadow_hooks(self.reg, self.store, self.launcher, self.bus),
+            self.store,
+            safe_builtins,
+            launcher=self.launcher,
+            registry=self.reg,
+            taint_skip=self.taint_skip,
+            persistent=self.persistent_shadow,
+        )
+
+    def _acquire_runner(self, host_locals: dict, safe_builtins: dict) -> ShadowRunner:
+        """Reuse the warm runner across turns; respawn it if it crashed.
+
+        ``input_args`` is stable across an RLM run, so the seed stays valid; a
+        respawn re-seeds from the (possibly changed) host locals.
+        """
+        runner = self._warm_runner
+        if runner is not None and not runner.is_alive:
+            runner = None
+        if runner is None:
+            runner = self._new_runner(host_locals, safe_builtins)
+            self._warm_runner = runner
+        else:
+            runner.begin_turn()
+        return runner
 
     def real_hooks(self) -> dict:
         """Claiming hooks for the real REPL (byte-identical to calling tools)."""
@@ -362,20 +505,30 @@ class SpecSession:
     def begin_stream_turn(
         self, host_locals: dict, safe_builtins: dict, peek: bool = True
     ) -> StreamTurn:
-        shadow = ShadowRunner(
-            host_locals,
-            make_shadow_hooks(self.reg, self.store, self.launcher, self.bus),
-            self.store,
-            safe_builtins,
-            launcher=self.launcher,
-            registry=self.reg,
-            taint_skip=self.taint_skip,
+        if not self.persistent_shadow:
+            # legacy behavior: spawn eagerly, tear down at turn end
+            shadow = self._new_runner(host_locals, safe_builtins)
+            return StreamTurn(StreamSegmenter(), shadow, peek=peek)
+        # lazy start: spawn/reuse the runner only when a speculatable call
+        # actually appears in the stream
+        spec_names = self._spec_names()
+        return StreamTurn(
+            StreamSegmenter(),
+            shadow=None,
+            peek=peek,
+            shadow_factory=lambda: self._acquire_runner(host_locals, safe_builtins),
+            spec_names=spec_names,
         )
-        return StreamTurn(StreamSegmenter(), shadow, peek=peek)
 
     def end_turn(self) -> None:
         self.store.evict_unclaimed("turn_end")
         self.launcher.budget.reset()
 
     def close(self) -> None:
+        if self._warm_runner is not None:
+            try:
+                self._warm_runner.shutdown()
+            except Exception:
+                pass
+            self._warm_runner = None
         self.launcher.shutdown()
