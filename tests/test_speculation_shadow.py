@@ -26,6 +26,7 @@ from dspy_rlm_hooks.speculation.shadow import (
     _shadow_worker,
     _worker_exec,
     _worker_peek,
+    classify_ns,
 )
 from dspy_rlm_hooks.speculation.store import SpecStore, Speculation
 from dspy_rlm_hooks.speculation.streaming import Segment
@@ -519,7 +520,7 @@ def test_shadow_worker_processes_messages_then_closes():
         conn,
         parent,
         {
-            "ns": {"x": 1, "f": lambda: 1},
+            "ns_seed": classify_ns({"x": 1, "f": lambda: 1}),
             "spec_names": {"llm_query"},
             "taint_skip": True,
             "budget": 1.0,
@@ -537,7 +538,7 @@ def test_worker_worker_survives_oserror():
     _shadow_worker(
         conn,
         parent,
-        {"ns": {}, "spec_names": set(), "taint_skip": True, "budget": 1.0},
+        {"ns_seed": {}, "spec_names": set(), "taint_skip": True, "budget": 1.0},
     )
     assert conn.closed
 
