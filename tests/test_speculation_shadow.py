@@ -486,22 +486,24 @@ def test_worker_exec_runaway_watchdog_aborts():
 
 def test_worker_peek_sends_plans():
     conn = _FakeConn([])
-    _worker_peek(conn, "llm_query('q')", {"llm_query"}, {})
+    _worker_peek(conn, "llm_query('q')", {"llm_query"}, {}, {}, {})
     assert len(conn.sent) == 1
-    kind, plans = conn.sent[0]
+    kind, plans, metas = conn.sent[0]
     assert kind == "plans"
     assert [p.tool for p in plans] == ["llm_query"]
 
 
 def test_worker_peek_survives_planning_failure(monkeypatch):
     # if plan_peeks raises, the worker degrades to no plans instead of crashing
-    def boom(tail, spec_names, ns):
+    def boom(tail, spec_names, ns, segment_productions=None):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("dspy_rlm_hooks.speculation.shadow.plan_peeks", boom)
+    monkeypatch.setattr(
+        "dspy_rlm_hooks.speculation.shadow.plan_peeks_with_chains", boom
+    )
     conn = _FakeConn([])
-    _worker_peek(conn, "llm_query('q')", {"llm_query"}, {})
-    assert conn.sent == [("plans", [])]
+    _worker_peek(conn, "llm_query('q')", {"llm_query"}, {}, {}, {})
+    assert conn.sent == [("plans", [], [])]
 
 
 # -- _shadow_worker -------------------------------------------------------------
