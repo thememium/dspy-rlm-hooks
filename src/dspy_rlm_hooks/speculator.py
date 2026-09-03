@@ -46,12 +46,16 @@ class Speculator:
         max_dispatches_per_turn: int = 2048,
         bus: EventBus | None = None,
         taint_skip: bool = True,
+        persistent_shadow: bool = True,
+        latency_aware: bool = True,
     ) -> None:
         self.registry = ToolRegistry()
         self.bus = bus or EventBus()
         self.max_inflight = max_inflight
         self.max_dispatches_per_turn = max_dispatches_per_turn
         self.taint_skip = taint_skip
+        self.persistent_shadow = persistent_shadow
+        self.latency_aware = latency_aware
         self._session: SpecSession | None = None
         # last known RAW fn per tool name (never a claim hook), so
         # _sync_registry_fns can recover when repl.tools holds hooks
@@ -123,6 +127,8 @@ class Speculator:
                 max_inflight=self.max_inflight,
                 max_dispatches_per_turn=self.max_dispatches_per_turn,
                 taint_skip=self.taint_skip,
+                persistent_shadow=self.persistent_shadow,
+                latency_aware=self.latency_aware,
             )
         return self._session
 
