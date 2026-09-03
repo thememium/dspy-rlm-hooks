@@ -49,6 +49,7 @@ def _repl_history_type() -> type:
 
     return REPLHistory
 
+
 logger = logging.getLogger(__name__)
 
 
