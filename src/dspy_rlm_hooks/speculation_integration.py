@@ -37,7 +37,6 @@ from __future__ import annotations
 import atexit
 import builtins
 import inspect
-import threading
 import weakref
 from collections.abc import Callable
 from functools import wraps
@@ -54,7 +53,7 @@ from dspy_rlm_hooks.utils import _assemble_execution_code
 if TYPE_CHECKING:
     # Kept off the module import path: importing this module must stay cheap
     # because the speculation engine's shadow subprocess imports this package.
-    from dspy.primitives.prediction import Prediction
+    pass
 
 
 def _prediction_type() -> type:
@@ -62,6 +61,7 @@ def _prediction_type() -> type:
     from dspy.primitives.prediction import Prediction
 
     return Prediction
+
 
 # The built-in LLM tools whose closure-local counter we re-implement on claim.
 _LLM_TOOLS = ("llm_query", "llm_query_batched")
@@ -104,14 +104,6 @@ def _placeholder(*args: Any, **kwargs: Any) -> Any:
     raise RuntimeError(
         "placeholder tool fn — should be replaced per-execution from repl.tools"
     )
-
-
-def _end_turn_quietly(turn: Any, timeout_s: float) -> None:
-    """Finish a StreamTurn off the real-execution critical path."""
-    try:
-        turn.end(timeout=timeout_s)
-    except Exception:
-        pass
 
 
 def _register_classifications(
@@ -493,7 +485,6 @@ def _speculation_execute_code(
                         t.end(timeout=config.timeout_s)
                     except Exception:
                         pass
-    finisher: threading.Thread | None = None
     if turn is not None:
         # Streaming turn is active (begun during generate_action). If it
         # produced no code deltas (cache hit, stream failure, or unfenced
@@ -504,17 +495,14 @@ def _speculation_execute_code(
                 turn.feed(f"```repl\n{assembled}\n```\n")
             except Exception:
                 pass
-        # Let the shadow drain CONCURRENTLY with real execution: the claim
-        # hooks wait on in-flight speculations anyway, and late dispatches are
-        # claimable while the interpreter runs. The drain is joined (bounded)
-        # before eviction below, so no dispatch can race the turn reset.
-        finisher = threading.Thread(
-            target=_end_turn_quietly,
-            args=(turn, config.timeout_s),
-            daemon=True,
-            name="spec-turn-finisher",
-        )
-        finisher.start()
+        # Drain BEFORE real execution so the shadow has queued every dispatch
+        # and the no-recall invariant holds (a claim must never re-dispatch a
+        # call the shadow is about to dispatch). With the persistent warm
+        # worker this drain is a cheap pipe round-trip, not a process teardown.
+        try:
+            turn.end(timeout=config.timeout_s)
+        except Exception:
+            pass
         self._active_stream_turn = None
 
     # --- install claiming hooks into the real tool path ---------------------
@@ -527,17 +515,6 @@ def _speculation_execute_code(
     try:
         return inner(repl, code, input_args)
     finally:
-        if finisher is not None:
-            finisher.join(timeout=config.timeout_s * 2)
-            if finisher.is_alive():
-                # the shadow missed its deadline: stop it so eviction cannot
-                # race a late dispatch (a persistent runner respawns next turn)
-                shadow = getattr(turn, "shadow", None)
-                if shadow is not None:
-                    try:
-                        shadow.abort("turn_end_timeout")
-                    except Exception:
-                        pass
         try:
             spec.end_turn()  # evict unclaimed, reset per-turn budget
         except Exception:
