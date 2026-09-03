@@ -216,34 +216,100 @@ def _picklable_ns(ns: dict) -> dict:
     return out
 
 
+def classify_ns(ns: dict) -> dict[str, bytes | None]:
+    """One pass over the host locals: pickle each non-dunder value to bytes
+    (validating picklability), ``None`` for anything that cannot cross the
+    spawn boundary (becomes :class:`Opaque` in the worker).
+
+    This replaces the old ``deepcopy + probe-pickle + spawn-pickle`` triple
+    serialization with a single pickle per value; the spawn transfer then ships
+    the already-serialized bytes. ``NonSpeculated`` markers never cross.
+    """
+    out: dict[str, bytes | None] = {}
+    for k, v in ns.items():
+        if k.startswith("__"):
+            continue
+        if isinstance(v, NonSpeculated):
+            out[k] = None  # marker is meaningless in the worker; taint it
+            continue
+        try:
+            out[k] = pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL)
+        except Exception:
+            # dict/list subclasses whose BEHAVIOR breaks pickling: a plain cast
+            # keeps the DATA (mutations stay inside the fork either way).
+            if isinstance(v, dict):
+                try:
+                    out[k] = pickle.dumps(dict(v), protocol=pickle.HIGHEST_PROTOCOL)
+                    continue
+                except Exception:
+                    pass
+            if isinstance(v, (list, tuple)):
+                try:
+                    out[k] = pickle.dumps(
+                        list(v) if isinstance(v, list) else tuple(v),
+                        protocol=pickle.HIGHEST_PROTOCOL,
+                    )
+                    continue
+                except Exception:
+                    pass
+            out[k] = None
+    return out
+
+
+def load_ns(classified: dict[str, bytes | None]) -> dict:
+    """Inverse of :func:`classify_ns` (worker side): bytes -> values, ``None``
+    -> :class:`Opaque`."""
+    out: dict = {}
+    for k, blob in classified.items():
+        if blob is None:
+            out[k] = Opaque(k)
+        else:
+            out[k] = pickle.loads(blob)
+    return out
+
+
 # =============================================================================
 # worker process
 # =============================================================================
 
 
 def _shadow_worker(conn, parent_conn, payload: dict) -> None:
-    """Run in the subprocess: execute segments, record predicted calls, plan peeks."""
+    """Run in the subprocess: execute segments, record predicted calls, plan peeks.
+
+    The namespace seed is kept un-pickled once; a persistent runner restores it
+    on every ``("reset",)`` so per-turn state never leaks across turns.
+    """
     parent_conn.close()
-    ns: dict = payload["ns"]
+    seed: dict = load_ns(payload["ns_seed"])
     spec_names: set[str] = payload["spec_names"]
     taint_skip: bool = payload["taint_skip"]
     budget: float = payload["budget"]
-    ns["__builtins__"] = shadow_builtins(dict(_builtins.__dict__))
-    ns.setdefault("__name__", "__main__")  # class stmts need it
-    # recording hooks live in the worker so they share its pipe end
-    for name in spec_names:
-        ns[name] = _make_record_hook(conn, name)
-    # cross-turn helpers keep __globals__ on the shadow namespace
-    for k, v in list(ns.items()):
-        if isinstance(v, FunctionType) and k not in spec_names:
-            ns[k] = _rebind(v, ns)
+
+    def fresh_ns() -> dict:
+        ns = copy.deepcopy(seed)
+        ns["__builtins__"] = shadow_builtins(dict(_builtins.__dict__))
+        ns.setdefault("__name__", "__main__")  # class stmts need it
+        # recording hooks live in the worker so they share its pipe end
+        for name in spec_names:
+            ns[name] = _make_record_hook(conn, name)
+        # cross-turn helpers keep __globals__ on the shadow namespace
+        for k, v in list(ns.items()):
+            if isinstance(v, FunctionType) and k not in spec_names:
+                ns[k] = _rebind(v, ns)
+        return ns
+
+    ns = fresh_ns()
     try:
         while True:
             msg = conn.recv()
             if msg is None:
                 break
-            if isinstance(msg, tuple) and msg[0] == "peek":
+            if isinstance(msg, tuple) and msg[0] == "reset":
+                ns = fresh_ns()
+            elif isinstance(msg, tuple) and msg[0] == "peek":
                 _worker_peek(conn, msg[1], spec_names, ns)
+            elif isinstance(msg, tuple) and msg[0] == "end_turn":
+                conn.send(("turn_ended",))
             else:
                 _worker_exec(conn, msg, ns, spec_names, taint_skip, budget)
     except (EOFError, OSError):
@@ -326,27 +392,38 @@ class ShadowRunner:
         registry=None,
         taint_skip: bool = True,
         stmt_budget: float = STMT_WALL_BUDGET_S,
+        persistent: bool = False,
     ) -> None:
         self.store = store
         self.launcher = launcher  # needed only for peeks
         self.registry = registry
         self.taint_skip = taint_skip
         self.hooks = dict(shadow_hooks)
+        self.persistent = persistent  # stay alive across turns (reset per turn)
         self.aborted: str | None = None
         self.executed = 0
         self.predicted: list[tuple[str, tuple]] = []  # (tool_name, args)
         self._last_peek_tally: dict = {}  # spec_key -> count from the last plan
         self._done = threading.Event()
+        self._turn_ended = threading.Event()
+        self._turn_open = False  # worker is between reset and end_turn
+        # classified seed — kept so a crashed worker can respawn without
+        # re-serializing the host namespace
+        self._seed = classify_ns(real_locals)
+        self._real_builtins = real_builtins
+        self._stmt_budget = stmt_budget
+        self._spawn()
 
+    # -- process lifecycle ----------------------------------------------------
+    def _spawn(self) -> None:
+        """Start (or restart) the worker subprocess from the classified seed."""
         ctx = _mp_context()
         self._parent_conn, child_conn = ctx.Pipe()
-        ns = _picklable_ns(snapshot_ns(real_locals))
-        ns.setdefault("__name__", "__main__")
         payload = {
-            "ns": ns,
-            "spec_names": set(shadow_hooks),
-            "taint_skip": taint_skip,
-            "budget": stmt_budget,
+            "ns_seed": self._seed,
+            "spec_names": set(self.hooks),
+            "taint_skip": self.taint_skip,
+            "budget": self._stmt_budget,
         }
         self._proc = ctx.Process(
             target=_shadow_worker,
@@ -356,10 +433,23 @@ class ShadowRunner:
         self._proc.start()
         child_conn.close()
         self._conn = self._parent_conn
+        self._done = threading.Event()
+        self._turn_ended = threading.Event()
+        self._turn_open = True  # a freshly spawned worker must be drained too
         self._reader = threading.Thread(
             target=self._read, daemon=True, name="shadow-reader"
         )
         self._reader.start()
+
+    @property
+    def is_alive(self) -> bool:
+        return self._proc.is_alive()
+
+    def ensure_alive(self) -> None:
+        """Respawn the worker if it died (a persistent runner outlives crashes)."""
+        if not self._proc.is_alive():
+            self.aborted = None
+            self._spawn()
 
     # -- producer side --------------------------------------------------------
     def feed(self, seg: Segment) -> None:
@@ -370,6 +460,39 @@ class ShadowRunner:
         all fed statements, so the namespace it evaluates against is exactly the
         state those statements produced."""
         self._conn.send(("peek", tail))
+
+    def begin_turn(self) -> None:
+        """Start a turn on a persistent runner: reset worker state to the seed
+        and clear this turn's parent-side accumulators. Pipe ordering
+        guarantees the reset lands before any segments fed after it."""
+        self.ensure_alive()
+        self.predicted = []
+        self.executed = 0
+        self.aborted = None
+        self._last_peek_tally = {}
+        self._turn_ended.clear()
+        self._conn.send(("reset",))
+        self._turn_open = True
+
+    def end_turn(self, timeout: float | None = None) -> bool:
+        """Drain a persistent runner's turn: wait until the worker has
+        processed every message fed so far. Returns True when acknowledged."""
+        if not self._turn_open:
+            return True
+        self._turn_open = False
+        if not self._proc.is_alive():
+            return False
+        try:
+            self._conn.send(("end_turn",))
+        except (OSError, BrokenPipeError):
+            return False
+        return self._turn_ended.wait(timeout)
+
+    def shutdown(self) -> None:
+        """Terminate a persistent runner gracefully (session close)."""
+        self._turn_open = False
+        self.finish()
+        self.join(5)
 
     def finish(self) -> None:
         self._conn.send(None)
@@ -408,6 +531,8 @@ class ShadowRunner:
                     self.executed += 1
                 elif kind == "abort":
                     self.aborted = msg[1]
+                elif kind == "turn_ended":
+                    self._turn_ended.set()
                 elif kind == "evict_tool":
                     self.store.evict_tool(msg[1], "shadow-rebind")
         except (EOFError, OSError):
