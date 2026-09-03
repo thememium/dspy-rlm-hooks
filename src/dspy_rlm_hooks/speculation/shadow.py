@@ -407,7 +407,7 @@ def _plan_tainted_segment(
             tree_body=tree.body,
             spec_names=hooks,
             ns=ns,
-            tail="",
+            tail=seg.source,  # the segment IS the complete (closed) text
             plans=plans,
             chain_plans=chain_plans,
             metas=metas,
