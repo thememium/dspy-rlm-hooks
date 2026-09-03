@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.1.11 (2026-09-03)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.10...v0.1.11)
+
+### 🩹 Fixes
+
+- speculative tool calling hash miss (#6) (#6) ([6efebc2](https://github.com/thememium/dspy-rlm-hooks/commit/6efebc2196cd747230a5b12228764ea8e0e93fa3))
+
+### 💅 Refactors
+
+- **streaming.py**: remove guard clauses and final line checks ([92ac571](https://github.com/thememium/dspy-rlm-hooks/commit/92ac57158a0328b4c71b3aeade79b3db165a539f))
+
+### ✅ Tests
+
+- **streaming**: cover remaining reachable branches in streaming.py ([d7cfc6a](https://github.com/thememium/dspy-rlm-hooks/commit/d7cfc6afed5995f76312501acd95ed99dc8a342f))
+- add coverage tests for tracing edge/fallback branches ([d113c37](https://github.com/thememium/dspy-rlm-hooks/commit/d113c376d7fb2bd7e008aa4ad4b4831ea362fac8))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
 ## v0.1.10 (2026-08-26)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.9...v0.1.10)
