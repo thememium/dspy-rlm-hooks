@@ -16,10 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from types import MethodType
-from typing import Any, cast
-
-from dspy.primitives.prediction import Prediction
-from dspy.primitives.repl_types import REPLHistory, REPLVariable
+from typing import TYPE_CHECKING, Any, cast
 
 from dspy_rlm_hooks.types import (
     PostExecutionHook,
@@ -37,6 +34,20 @@ from dspy_rlm_hooks.utils import (
     _strip_code_fences,
     _with_prompt_context,
 )
+
+if TYPE_CHECKING:
+    # Imported lazily so importing this module (e.g. from the speculation
+    # engine's shadow subprocess) never pays the dspy import cost.
+    from dspy.primitives.prediction import Prediction
+    from dspy.primitives.repl_types import REPLHistory, REPLVariable
+
+
+def _repl_history_type() -> type:
+    """Runtime ``REPLHistory`` class, imported on first use (kept off the
+    module import path so the shadow subprocess stays lightweight)."""
+    from dspy.primitives.repl_types import REPLHistory
+
+    return REPLHistory
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +204,7 @@ def _execute_iteration(
     )
 
     # --- post-iteration hook ---
-    if self._hook_post_iteration and isinstance(processed, REPLHistory):
+    if self._hook_post_iteration and isinstance(processed, _repl_history_type()):
         post_iter_out = self._hook_post_iteration(
             iteration, action, code, result, processed
         )
@@ -297,7 +308,7 @@ async def _aexecute_iteration(
     )
 
     # --- post-iteration hook ---
-    if self._hook_post_iteration and isinstance(processed, REPLHistory):
+    if self._hook_post_iteration and isinstance(processed, _repl_history_type()):
         post_iter_out = self._hook_post_iteration(
             iteration, pred, code, result, processed
         )
