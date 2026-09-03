@@ -25,9 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from dspy_rlm_hooks.speculation.hooks import make_real_hooks
 from dspy_rlm_hooks.speculation.session import SpecSession, ToolRegistry
-from dspy_rlm_hooks.speculation.streaming import StreamSegmenter
 
 TOOL_LATENCY_S = 0.3
 STREAM_PACE_S = 0.004  # per chunk, simulates token arrival
@@ -73,7 +71,7 @@ def stream_code(turn, code: str) -> None:
 
 
 def run_speculated() -> dict:
-    reg = make_registry(calls := [])
+    reg = make_registry([])
     session = SpecSession(reg)
     turn = session.begin_stream_turn({"context": "a\n\nb\n\nc"}, {}, peek=True)
     t0 = time.perf_counter()
@@ -84,7 +82,7 @@ def run_speculated() -> dict:
 
     hooks = session.real_hooks()
     t0 = time.perf_counter()
-    result = hooks["llm_query"](prompt="score: a")
+    hooks["llm_query"](prompt="score: a")
     t_real = time.perf_counter() - t0
     session.end_turn()
     session.close()
@@ -102,7 +100,7 @@ def run_speculated() -> dict:
 
 
 def run_baseline() -> float:
-    reg = make_registry(calls := [])
+    reg = make_registry([])
     session = SpecSession(reg)
     hooks = session.baseline_hooks()
     t0 = time.perf_counter()
@@ -119,7 +117,9 @@ def main() -> None:
     print(f"baseline real call (no speculation):   {base * 1000:8.1f} ms")
     print(f"speculated: streamed+drain+claim:      {spec['total_s'] * 1000:8.1f} ms")
     print(f"  stream window:                       {spec['stream_s'] * 1000:8.1f} ms")
-    print(f"  real-path claim wait:                {spec['first_call_wait_s'] * 1000:8.1f} ms")
+    print(
+        f"  real-path claim wait:                {spec['first_call_wait_s'] * 1000:8.1f} ms"
+    )
     print(f"  tool latency hidden under streaming: {hidden_ms:8.1f} ms")
     print(f"  claim hits/misses:                   {spec['hits']}/{spec['misses']}")
 
