@@ -975,6 +975,14 @@ def _unroll_for(
                     plans.append(resolved)
                 elif isinstance(resolved, ChainPlan):
                     chain_plans.append(resolved)
+                # bind single-target assignments so LATER body statements can
+                # chain off this call (same as _plan_body does at top level)
+                target = _single_assign_target(stmt)
+                if target is not None and resolved is not None:
+                    if isinstance(resolved, Plan):
+                        productions[target] = ("key", resolved.key)
+                    else:
+                        productions[target] = ("cont", resolved.cont_id)
             item_assigned |= _assigned_names(stmt)
     return plans, chain_plans
 
