@@ -42,11 +42,26 @@ def _real_execute_code(repl, code, input_args):
     return repl.execute(code, variables=dict(input_args))
 
 
+class _SubLMRouter:
+    """sub_lm stand-in: routes prompts to the recorded tool double (counter-
+    free speculative llm executions call sub_lm directly)."""
+
+    def __init__(self, tools: dict) -> None:
+        self._tools = dict(tools)  # snapshot the RAW fns (repl.tools gets hooks)
+
+    def __call__(self, prompt: str):
+        fn = self._tools.get("llm_query")
+        if fn is None:
+            return [{"text": f"[no llm_query] {prompt}"}]
+        return [{"text": fn(prompt)}]
+
+
 def _setup_real(mock_rlm, mock_repl, tools):
     mock_rlm.max_llm_calls = 50
     mock_repl.tools = tools
     mock_repl.execute = _make_execute(tools)
     mock_rlm._execute_code = _real_execute_code
+    mock_rlm.sub_lm = _SubLMRouter(tools)
     return mock_rlm, mock_repl
 
 
@@ -95,6 +110,21 @@ def test_streaming_claim_no_recall(mock_rlm, mock_repl):
 
     mock_rlm._execute_code(mock_repl, "x = llm_query('hello')\n", {})
     # Dispatched once by the shadow during streaming, claimed (not re-called).
+    print(
+        "STORE:",
+        [
+            (s.key[0], s.args, s.state, repr(s._result)[:60], s.error)
+            for s in mock_rlm._speculator.session.store.all
+        ],
+    )
+    print("sub_lm type:", type(mock_rlm.sub_lm).__name__)
+    print(
+        "BUS:",
+        [
+            (k, v.get("tool") or v.get("msg", ""))
+            for k, v in mock_rlm._speculator.session.bus.history
+        ],
+    )
     assert real_calls == ["hello"]
 
 

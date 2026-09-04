@@ -54,12 +54,33 @@ def _make_execute(tools):
 
 
 def _setup_real(mock_rlm, mock_repl, tools):
-    """Wire a mock RLM/repl so real execution actually runs code + claim hooks."""
+    """Wire a mock RLM/repl so real execution actually runs code + claim hooks.
+
+    Counter-free speculative llm executions call ``sub_lm`` directly, so the
+    sub-LM is routed through the SAME recording doubles the tools use — a
+    speculative llm execution and a real one are then indistinguishable in the
+    recorded call list, which is what the AC assertions check.
+    """
     mock_rlm.max_llm_calls = 50
     mock_repl.tools = tools
     mock_repl.execute = _make_execute(tools)
     mock_rlm._execute_code = _real_execute_code
+    mock_rlm.sub_lm = _SubLMRouter(tools)
     return mock_rlm, mock_repl
+
+
+class _SubLMRouter:
+    """sub_lm stand-in: routes prompts to the recorded tool double."""
+
+    def __init__(self, tools: dict) -> None:
+        self._tools = dict(tools)  # snapshot the RAW fns (repl.tools gets hooks)
+
+    def __call__(self, prompt: str):
+        fn = self._tools.get("llm_query")
+        if fn is None:
+            return [{"text": f"[no llm_query] {prompt}"}]
+        result = fn(prompt)
+        return [{"text": result}]
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +244,7 @@ def test_ac7_hook_composition(mock_rlm, mock_repl, mock_variables, mock_history)
 
     tools = {"llm_query": llm_query}
     mock_rlm.max_llm_calls = 50
+    mock_rlm.sub_lm = _SubLMRouter(tools)
     mock_repl.tools = tools
     mock_repl.execute = _make_execute(tools)
 
@@ -315,6 +337,7 @@ async def test_ac11_async_path(mock_rlm, mock_repl, mock_variables, mock_history
 
     tools = {"llm_query": llm_query}
     mock_rlm.max_llm_calls = 50
+    mock_rlm.sub_lm = _SubLMRouter(tools)
     mock_repl.tools = tools
     mock_repl.execute = _make_execute(tools)
 
@@ -350,6 +373,7 @@ def test_ac12_real_interpreter_claim_bridge(mock_rlm):
 
     mock_rlm.max_llm_calls = 50
     mock_rlm._execute_code = _real_execute_code
+    mock_rlm.sub_lm = _SubLMRouter({"llm_query": llm_query})
     enable_rlm_speculation(mock_rlm)
 
     with PythonInterpreter(tools={"llm_query": llm_query}) as repl:
@@ -387,6 +411,7 @@ def test_ac13_order1_hooks_then_speculation(
 
     tools = {"llm_query": llm_query}
     mock_rlm.max_llm_calls = 50
+    mock_rlm.sub_lm = _SubLMRouter(tools)
     mock_repl.tools = tools
     mock_repl.execute = _make_execute(tools)
 
