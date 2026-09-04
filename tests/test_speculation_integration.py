@@ -17,12 +17,13 @@ Covers AC3-AC8 and AC10-AC13:
 from __future__ import annotations
 
 import time
-from types import MethodType
+from types import MethodType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from dspy_rlm_hooks import PostExecutionOutput, PreExecutionOutput, enable_rlm_hooks
+from dspy_rlm_hooks.speculation.config import SpeculationConfig
 from dspy_rlm_hooks.speculation_integration import (
     _install_claim_hooks,
     _make_claim_hook,
@@ -31,6 +32,7 @@ from dspy_rlm_hooks.speculation_integration import (
     disable_rlm_speculation,
     enable_rlm_speculation,
 )
+from dspy_rlm_hooks.speculator import Speculator
 
 
 def _real_execute_code(repl, code, input_args):
@@ -880,3 +882,21 @@ def test_tools_mapping_tuple_form_applies_policy():
     assert tool.deterministic is True  # policy kwargs applied
     assert tool.latency_hint_ms == 42.0
     disable_rlm_speculation(rlm)
+
+
+def test_install_claim_hooks_non_introspectable_tool_signature():
+    """A builtin (non-introspectable) user tool must not crash claim-hook
+    installation — the signature fallback leaves the hook untouched."""
+
+    from dspy_rlm_hooks.speculation.guards import is_claim_hook
+    from dspy_rlm_hooks.speculation_integration import _install_claim_hooks
+
+    program = SimpleNamespace(max_llm_calls=50)
+    spec = Speculator()
+    # `type` has NO introspectable signature: inspect.signature raises
+    # ValueError, exercising the fallback in _install_claim_hooks
+    spec.registry.register("weird", type, speculatable=True, pure=True)
+    config = SpeculationConfig()
+    repl = SimpleNamespace(tools={"weird": type}, _tools_registered=False)
+    _install_claim_hooks(repl, spec, config, program)
+    assert is_claim_hook(repl.tools["weird"])
