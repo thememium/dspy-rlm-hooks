@@ -31,7 +31,7 @@ import pickle
 import signal
 import threading
 from collections import Counter
-from types import FunctionType
+from types import FunctionType, SimpleNamespace
 from typing import Any
 
 from dspy_rlm_hooks.speculation.store import SpecStore
@@ -589,6 +589,14 @@ class ShadowRunner:
         self._pending_chains: dict[int, ChainMeta] = {}
         self._cont_keys: dict[int, Any] = {}  # cont_id -> realized claim key
         self._segkey_to_real: dict[tuple, Any] = {}  # raw-material id -> claim key
+        # batched-call decomposition: element peeks under per-element claim
+        # keys, assembled back into the ordered list when all resolve
+        self._batch_seq = 0
+        self._batch_keys: dict[Any, list] = {}  # batch key -> [element keys]
+        self._batch_values: dict[Any, dict[int, Any]] = {}  # batch key -> {idx: value}
+        self._key_to_batch: dict[
+            Any, tuple[Any, int]
+        ] = {}  # element key -> (batch key, idx)
         self._chain_ready: dict[int, set[str]] = {}  # cont_id -> satisfied deps
         self._dep_values: dict[int, dict[str, Any]] = {}  # cont_id -> dep results
         self._send_lock = threading.Lock()  # the pipe is not thread-safe
@@ -659,6 +667,9 @@ class ShadowRunner:
         """Record a producer resolution; fire every chain whose deps are now
         all satisfied. A FAILED producer drops its dependent chains (the real
         run will surface the same error through its own claim)."""
+        if key in self._key_to_batch:
+            self._record_batch_element(key, spec)
+            return
         if spec is not None and spec.error is not None:
             with self._chain_lock:
                 self._pending_chains = {
@@ -755,6 +766,9 @@ class ShadowRunner:
             self._pending_chains = {}
             self._cont_keys = {}
             self._segkey_to_real = {}
+            self._batch_keys = {}
+            self._batch_values = {}
+            self._key_to_batch = {}
             self._chain_ready = {}
             self._dep_values = {}
         self._turn_ended.clear()
@@ -857,10 +871,85 @@ class ShadowRunner:
             return None
         if tool.gate_fn and not tool.gate_fn(args, kwargs):
             return None
+        # Batched tools (llm_query_batched & friends) are claimed PER ELEMENT
+        # by the real run, so a whole-batch peek could never be claimed —
+        # dispatch one peek per prompt element instead.
+        decomposed = self._decompose_batched(name, args, kwargs, needed=1, adopt=True)
+        if decomposed is not None:
+            return decomposed[0]
         self.launcher.ensure_peeked(tool, args, kwargs, 1)
         key = spec_key(tool, args, kwargs)
         self.store.adopt(key)
         return key
+
+    def _batch_key_for(self, name: str, args: tuple, kwargs: dict) -> Any:
+        """Synthetic stable key for a batched call's ASSEMBLED result, or None
+        when the call is not batched-shaped (or has no single-tool registry
+        entry to claim elements against)."""
+        registry = self.registry
+        if registry is None or not name.endswith("_batched"):
+            return None
+        if not args or not isinstance(args[0], (list, tuple)):
+            return None
+        single = registry.get(name[: -len("_batched")])
+        if single is None:
+            return None
+        return ("__batch__", f"{name}|{spec_key(single, args, kwargs)[1]}")
+
+    def _decompose_batched(
+        self, name: str, args: tuple, kwargs: dict, needed: int, adopt: bool
+    ) -> tuple[Any, list] | None:
+        """Dispatch one peek PER ELEMENT of a batched call, under the same
+        per-element claim keys the real run uses. Registers a batch group so
+        the ordered list of element results can be assembled and published to
+        dependent chains when every element resolves. Returns
+        ``(batch_key, elem_keys)``, or None when the call is not batched-shaped
+        (the caller falls back to a whole-batch dispatch)."""
+        if self.launcher is None or self.registry is None:
+            return None
+        batch_key = self._batch_key_for(name, args, kwargs)
+        if batch_key is None:
+            return None
+        single = self.registry.get(name[: -len("_batched")])
+        assert single is not None
+        rest = tuple(args[1:])
+        elem_keys: list = []
+        for elem in args[0]:
+            elem_args = (elem,) + rest
+            key = spec_key(single, elem_args, kwargs)
+            elem_keys.append(key)
+            self.launcher.ensure_peeked(single, elem_args, kwargs, needed)
+            if adopt:
+                self.store.adopt(key)
+        with self._chain_lock:
+            self._batch_keys[batch_key] = elem_keys
+            self._batch_values.setdefault(batch_key, {})
+            for i, k in enumerate(elem_keys):
+                self._key_to_batch[k] = (batch_key, i)
+        return batch_key, elem_keys
+
+    def _record_batch_element(self, key: Any, spec: Any) -> None:
+        """Record one batch element's resolved value; assemble and publish the
+        ordered list to dependent chains when the last element lands."""
+        batch_key, idx = self._key_to_batch[key]
+        with self._chain_lock:
+            values = self._batch_values.setdefault(batch_key, {})
+            if spec is not None and spec.error is None:
+                values[idx] = spec._result
+            else:
+                # a failed element means the batch result is garbage: never
+                # assemble (dependent chains stay unfired, like failed producers)
+                self._batch_keys.pop(batch_key, None)
+                return
+            keys = self._batch_keys.get(batch_key, [])
+            complete = bool(keys) and all(i in values for i in range(len(keys)))
+            assembled = [values[i] for i in range(len(keys))] if complete else None
+        if complete:
+            # publish the assembled list under the batch key (recursion depth 1:
+            # the batch key is never itself a batch element)
+            self._fire_chains_for_key(
+                batch_key, SimpleNamespace(_result=assembled, error=None)
+            )
 
     def _handle_plans(self, plans, chain_metas=()) -> None:
         if self.launcher is None:
@@ -875,6 +964,15 @@ class ShadowRunner:
             if tool is None or not tool.speculatable:
                 continue
             if tool.gate_fn and not tool.gate_fn(args, kwargs):
+                continue
+            decomposed = self._decompose_batched(
+                tool_name, args, kwargs, needed, adopt=False
+            )
+            if decomposed is not None:
+                batch_key, elem_keys = decomposed
+                # element-level tally: retraction must evict per-element peeks
+                for elem_key in elem_keys:
+                    new_tally[elem_key] = needed
                 continue
             self.launcher.ensure_peeked(tool, args, kwargs, needed)
             new_tally[spec_key(tool, args, kwargs)] = needed
@@ -895,7 +993,12 @@ class ShadowRunner:
                 continue
             tool = self.registry.get(p.tool) if self.registry else None
             if tool is not None:
-                plan_key_to_real[p.key] = spec_key(tool, p.args, p.kwargs)
+                batch_key = self._batch_key_for(p.tool, p.args, p.kwargs)
+                if batch_key is not None:
+                    # the batch's ASSEMBLED list is what dependent chains see
+                    plan_key_to_real[p.key] = batch_key
+                else:
+                    plan_key_to_real[p.key] = spec_key(tool, p.args, p.kwargs)
         translated: list[ChainMeta] = []
         for m in chain_metas:
             deps: dict[str, Any] = {}
