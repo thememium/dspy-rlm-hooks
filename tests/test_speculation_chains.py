@@ -5,9 +5,9 @@ whole dataflow chains under the model's still-streaming output."""
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import pytest
-from types import SimpleNamespace
 
 from dspy_rlm_hooks.speculation.session import (
     EventBus,
@@ -17,6 +17,7 @@ from dspy_rlm_hooks.speculation.session import (
 )
 from dspy_rlm_hooks.speculation.shadow import ShadowRunner
 from dspy_rlm_hooks.speculation.store import SpecStore
+from dspy_rlm_hooks.speculation.streaming import ChainMeta, Plan
 
 CODE_CHAIN = """```repl
 doc = fetch("auth")
@@ -317,7 +318,6 @@ def test_batched_peek_decomposition_and_chain_via_handle_plans():
     peeks, and a chained call on the batched result fires with the ASSEMBLED
     list once all elements resolve."""
     import time as _time
-    from types import SimpleNamespace
 
     reg = ToolRegistry()
     reg.register(
@@ -340,19 +340,18 @@ def test_batched_peek_decomposition_and_chain_via_handle_plans():
         # the for-loop keeps the batched call in the OPEN tail (peek path)
         code = (
             "```repl\n"
-            'out = {}\n'
+            "out = {}\n"
             'for kind in ["x"]:\n'
             '    reviews = llm_query_batched(["a", "b"])\n'
-            '    out[kind] = rank(reviews)\n'
-            'print(out)\n'
-            '```\n'
+            "    out[kind] = rank(reviews)\n"
+            "print(out)\n"
+            "```\n"
         )
         for i in range(0, len(code), 6):
             turn.feed(code[i : i + 6])
             _time.sleep(0.001)
         turn.end(timeout=5.0)
 
-        hooks = session.real_hooks()
         # the rank chain fired with the ASSEMBLED list once both elements
         # resolved (the last peek generation clears the tally, so assert the
         # OUTCOME, not the tally)
@@ -378,11 +377,17 @@ def test_decompose_batched_guards():
     try:
         # launcher None -> None
         assert (
-            runner._decompose_batched("llm_query_batched", (["a"],), {}, 1, True) is None
+            runner._decompose_batched("llm_query_batched", (["a"],), {}, 1, True)
+            is None
         )
         # non-batched name -> None
         runner2 = ShadowRunner(
-            {}, {}, SpecStore(), {}, launcher=Launcher(SpecStore(), EventBus()), registry=reg
+            {},
+            {},
+            SpecStore(),
+            {},
+            launcher=Launcher(SpecStore(), EventBus()),
+            registry=reg,
         )
         try:
             assert runner2._batch_key_for("llm_query", (["a"],), {}) is None
@@ -393,7 +398,12 @@ def test_decompose_batched_guards():
             reg3 = ToolRegistry()
             reg3.register("rank", lambda items: "r", speculatable=True, pure=True)
             runner3 = ShadowRunner(
-                {}, {}, SpecStore(), {}, launcher=Launcher(SpecStore(), EventBus()), registry=reg3
+                {},
+                {},
+                SpecStore(),
+                {},
+                launcher=Launcher(SpecStore(), EventBus()),
+                registry=reg3,
             )
             try:
                 assert runner3._batch_key_for("llm_query_batched", (["a"],), {}) is None
@@ -427,7 +437,8 @@ def test_record_batch_element_failure_never_assembles():
             ("llm_query", "k1"), SimpleNamespace(_result="v0", error=None)
         )
         runner._fire_chains_for_key(
-            ("llm_query", "k2"), SimpleNamespace(_result=None, error=RuntimeError("boom"))
+            ("llm_query", "k2"),
+            SimpleNamespace(_result=None, error=RuntimeError("boom")),
         )
         assert batch_key not in runner._batch_keys  # batch dropped
     finally:
@@ -448,7 +459,7 @@ def test_llm_spec_fns_error_paths(monkeypatch):
 
     import dspy_rlm_hooks.speculation_integration as SI
 
-    monkeypatch.setattr(SI.dspy.settings, "lm", None, raising=False)
+    monkeypatch.setattr(dspy.settings, "lm", None, raising=False)
     with pytest.raises(Exception):
         fns["llm_query"]("x")
 
@@ -459,3 +470,118 @@ def test_llm_spec_fns_error_paths(monkeypatch):
 
     monkeypatch.setattr(dspy, "LMResponse", FakeLMResponse, raising=False)
     assert SI._extract_sub_lm_text(FakeLMResponse("resp")) == "resp"
+
+
+def test_handle_plans_dedup_and_batched_decomposition():
+    """Duplicate plans dedupe (needed=2), and a batched plan decomposes into
+    per-element tally entries under the single tool's claim keys."""
+    reg = ToolRegistry()
+    reg.register("llm_query", lambda prompt: "x", speculatable=True, pure=True)
+    reg.register(
+        "llm_query_batched",
+        lambda prompts: ["x"],
+        speculatable=True,
+        pure=True,
+    )
+    store = SpecStore()
+    runner = ShadowRunner(
+        {}, {}, store, {}, launcher=Launcher(store, EventBus()), registry=reg
+    )
+    try:
+        plan = Plan(tool="llm_query_batched", args=(["a", "b"],), kwargs={})
+        runner._handle_plans([plan, plan], [])
+        # both elements dispatched exactly once per needed slot
+        elem = [s for s in store.all if s.key[0] == "llm_query"]
+        assert [(s.args) for s in elem] == [("a",), ("a",), ("b",), ("b",)]
+        # the tally tracks ELEMENT keys
+        assert any(k[0] == "llm_query" for k in runner._last_peek_tally)
+    finally:
+        runner.shutdown()
+
+
+def test_plan_key_to_real_batched_plan():
+    reg = ToolRegistry()
+    reg.register("llm_query", lambda prompt: "x", speculatable=True, pure=True)
+    reg.register(
+        "llm_query_batched",
+        lambda prompts: ["x"],
+        speculatable=True,
+        pure=True,
+    )
+    store = SpecStore()
+    runner = ShadowRunner(
+        {}, {}, store, {}, launcher=Launcher(store, EventBus()), registry=reg
+    )
+    try:
+        from dspy_rlm_hooks.speculation.tool import canonical_hash
+
+        plan = Plan(
+            tool="llm_query_batched",
+            args=(["a"],),
+            kwargs={},
+            key=(
+                "llm_query_batched",
+                canonical_hash("llm_query_batched", (["a"],), {}),
+            ),
+        )
+        meta = ChainMeta(cont_id=1, tool="rank", deps={"reviews": ("key", plan.key)})
+        runner._handle_plans([plan], [meta])
+        # the chain dep was translated to the BATCH key, not a raw plan key
+        (meta,) = runner._pending_chains.values()
+        assert meta.deps["reviews"][0] == "key"
+        assert meta.deps["reviews"][1][0] == "__batch__"
+    finally:
+        runner.shutdown()
+
+
+def test_decompose_batched_no_launcher():
+    reg = ToolRegistry()
+    reg.register("llm_query", lambda prompt: "x", speculatable=True, pure=True)
+    reg.register("llm_query_batched", lambda prompts: "x", speculatable=True, pure=True)
+    store = SpecStore()
+    runner = ShadowRunner({}, {}, store, {}, launcher=None, registry=reg)
+    try:
+        assert (
+            runner._decompose_batched("llm_query_batched", (["a"],), {}, 1, True)
+            is None
+        )
+    finally:
+        runner.shutdown()
+
+
+def test_unroll_binds_productions_for_loop_body_chains():
+    """A loop-body producer binds its target so a LATER loop-body call chains
+    off it (productions binding inside _unroll_for)."""
+    from dspy_rlm_hooks.speculation.streaming import plan_peeks_with_chains
+
+    tail = (
+        'for kind in ["x"]:\n'
+        '    reviews = llm_query_batched(["a", "b"])\n'
+        "    out[kind] = rank(reviews)\n"
+    )
+    plans, chains, metas = plan_peeks_with_chains(
+        tail, {"llm_query_batched", "rank"}, {}
+    )
+    # the batched call is planned; rank chains off the batched result
+    assert any(p.tool == "llm_query_batched" for p in plans)
+    assert any(cp.tool == "rank" for cp in chains)
+    assert any(m.deps.get("reviews", ("",))[0] in ("key", "cont") for m in metas)
+
+
+def test_unroll_binds_cont_productions_for_chained_loop_bodies():
+    """A loop-body call chained on a SEGMENT production, followed by another
+    loop-body call reading the first's target: the cont binding fires."""
+    from dspy_rlm_hooks.speculation.streaming import plan_peeks_with_chains
+
+    tail = 'reviews = llm_query("s: " + doc)\nout = rank(reviews)\n'
+    seg_productions = {"doc": ("segkey", ("llm_query", "h"))}
+    plans, chains, metas = plan_peeks_with_chains(
+        tail, {"llm_query", "rank"}, {}, segment_productions=seg_productions
+    )
+    # llm_query chains on the seg-produced doc; rank chains on the llm cont
+    assert not plans
+    assert len(chains) == 2
+    by_tool = {c.tool: c for c in chains}
+    assert by_tool["llm_query"].deps["doc"][0] == "segkey"
+    assert by_tool["rank"].deps["reviews"] == ("cont", by_tool["llm_query"].cont_id)
+    assert any(m.cont_id == by_tool["rank"].cont_id for m in metas)

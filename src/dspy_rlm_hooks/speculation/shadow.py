@@ -30,7 +30,6 @@ import multiprocessing
 import pickle
 import signal
 import threading
-from collections import Counter
 from types import FunctionType, SimpleNamespace
 from typing import Any
 
@@ -871,6 +870,11 @@ class ShadowRunner:
             return None
         if tool.gate_fn and not tool.gate_fn(args, kwargs):
             return None
+        if contains_nonspec(args) or contains_nonspec(kwargs):
+            # the sandbox recorded this call with a TAINT MARKER in its args
+            # (assigned and used within the same segment): never dispatch a
+            # speculative call with garbage arguments
+            return None
         # Batched tools (llm_query_batched & friends) are claimed PER ELEMENT
         # by the real run, so a whole-batch peek could never be claimed —
         # dispatch one peek per prompt element instead.
@@ -954,19 +958,26 @@ class ShadowRunner:
     def _handle_plans(self, plans, chain_metas=()) -> None:
         if self.launcher is None:
             return
-        tally = Counter(
-            (p.tool, p.args, tuple(sorted(p.kwargs.items()))) for p in plans
-        )
         new_tally: dict = {}
-        for (tool_name, args, kwargs_items), needed in tally.items():
-            kwargs = dict(kwargs_items)
-            tool = self.registry.get(tool_name) if self.registry else None
+        # dedupe by HASHABLE identity (batched args contain lists)
+        seen: dict[tuple, int] = {}
+        ordered: list = []
+        for p in plans:
+            tool = self.registry.get(p.tool) if self.registry else None
             if tool is None or not tool.speculatable:
                 continue
-            if tool.gate_fn and not tool.gate_fn(args, kwargs):
+            if tool.gate_fn and not tool.gate_fn(p.args, p.kwargs):
                 continue
+            ident = (p.tool, repr(p.args), repr(sorted(p.kwargs.items())))
+            if ident in seen:
+                seen[ident] += 1
+                continue
+            seen[ident] = 1
+            ordered.append((tool, p.args, p.kwargs))
+        for tool, args, kwargs in ordered:
+            needed = seen[(tool.name, repr(args), repr(sorted(kwargs.items())))]
             decomposed = self._decompose_batched(
-                tool_name, args, kwargs, needed, adopt=False
+                tool.name, args, kwargs, needed, adopt=False
             )
             if decomposed is not None:
                 batch_key, elem_keys = decomposed
