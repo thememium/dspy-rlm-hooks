@@ -281,8 +281,15 @@ def _install_claim_hooks(
         else:
             # Mirror the LLM branch: hide the raw hook's internal ``_tool=ToolSpec``
             # default from DSPy's tool registration (it is not JSON-serializable).
+            # dspy 3.3.x wraps tools with __signature__ set; 3.2.x passes raw
+            # functions whose signature must be COMPUTED here.
             raw = tools[name]
             sig = getattr(raw, "__signature__", None)
+            if sig is None:
+                try:
+                    sig = inspect.signature(raw)
+                except (TypeError, ValueError):
+                    sig = None
             if sig is not None:
                 setattr(claim_hook, "__signature__", sig)
             tools[name] = tag_claim_hook(claim_hook, raw_fn=raw)
