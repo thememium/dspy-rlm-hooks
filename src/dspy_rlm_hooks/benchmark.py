@@ -163,6 +163,9 @@ def default_scenario(tool_ms: float = 60.0, llm_ms: float = 150.0) -> Scenario:
                 "    t0 = now()\n"
                 '    out[kind] = llm_query(kind + ": alpha")\n'
                 '    timings["llm_query:" + kind] = round((now() - t0) * 1000, 1)\n'
+                "t0 = now()\n"
+                'reviews = llm_query_batched(["review-a", "review-b", "review-c"])\n'
+                'timings["llm_query_batched"] = round((now() - t0) * 1000, 1)\n'
                 'print("TIMINGS " + json.dumps(timings))\n'
                 'print("SUB:" + out["summary"])\n'
                 'print("REV:" + out["review"])\n'
@@ -170,7 +173,7 @@ def default_scenario(tool_ms: float = 60.0, llm_ms: float = 150.0) -> Scenario:
         ),
         ScriptedIteration(
             reasoning="Submit.",
-            code='SUBMIT("SCRIPTED|" + out["summary"][:24] + "|" + out["review"][:20])\n',
+            code='SUBMIT("SCRIPTED|" + out["summary"][:24] + "|" + str(len(reviews)))\n',
         ),
     ]
     tools = [
