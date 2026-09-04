@@ -116,6 +116,7 @@ _SHADOW_IMPORT_WHITELIST = {
     "re",
     "asyncio",  # async tools: model code needs run/gather to reach the hooks
     "json",
+    "time",  # perf_counter measurements in model code; runaway sleeps are SIGALRM-bounded
     "math",
     "itertools",
     "collections",
