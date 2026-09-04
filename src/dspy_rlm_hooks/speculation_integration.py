@@ -39,6 +39,7 @@ import builtins
 import inspect
 import weakref
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from types import MethodType
 from typing import TYPE_CHECKING, Any
@@ -106,16 +107,77 @@ def _placeholder(*args: Any, **kwargs: Any) -> Any:
     )
 
 
+def _extract_sub_lm_text(response: Any) -> str:
+    """Extract the text from a sub-LM response — best-effort, mirroring dspy's
+    ``_query_lm`` shapes with a ``str`` fallback.
+
+    Speculative results are best-effort predictions: the strict response
+    contract stays enforced by the REAL call (a claimed miss re-runs it), so a
+    lenient fallback here never changes what the model finally receives when
+    the sub-LM is genuinely misconfigured."""
+    import dspy  # lazy: this module must stay importable without dspy
+
+    lm_response = getattr(dspy, "LMResponse", None)
+    if lm_response is not None and isinstance(response, lm_response):
+        text = response.text
+    elif isinstance(response, list) and response:
+        first = response[0]
+        text = first.get("text") if isinstance(first, dict) else first
+    else:
+        text = str(response)
+    return text if isinstance(text, str) else str(text)
+
+
+def _make_llm_spec_fns(rlm: Any) -> dict[str, Callable]:
+    """Counter-free speculative executors for the built-in LLM tools.
+
+    dspy's raw ``llm_query`` closure increments the ``max_llm_calls`` budget on
+    EVERY execution — including speculative ones — so wasted bets (evicted
+    peeks, re-plan churn) consumed the model's logical budget. Speculative
+    executions call the sub-LM directly instead: they do not consume the
+    logical budget (enforced by the claim-hook counter on model-requested
+    calls only) and stay bounded by the speculation budget
+    (``max_dispatches_per_turn``) plus per-prompt dedup.
+    """
+
+    def _query(prompt: str) -> str:
+        import dspy  # lazy: this module must stay importable without dspy
+
+        lm = getattr(rlm, "sub_lm", None) or dspy.settings.lm
+        if lm is None:
+            # dspy 3.2.x exposes this as RuntimeError, 3.3.x as LMNotConfiguredError
+            err = getattr(dspy, "LMNotConfiguredError", RuntimeError)
+            raise err(
+                "No LM configured. Use dspy.configure(lm=...) or pass sub_lm to RLM."
+            )
+        return _extract_sub_lm_text(lm(prompt))
+
+    def llm_query(prompt: str) -> str:
+        if not prompt:
+            raise ValueError("prompt cannot be empty")
+        return _query(prompt)
+
+    def llm_query_batched(prompts: list) -> list:
+        if not prompts:
+            return []
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            return list(executor.map(_query, prompts))
+
+    return {"llm_query": llm_query, "llm_query_batched": llm_query_batched}
+
+
 def _register_classifications(
-    spec: Speculator, config: SpeculationConfig, tools: Any
+    spec: Speculator, config: SpeculationConfig, tools: Any, rlm: Any = None
 ) -> None:
     """Register tool CLASSIFICATIONS once per RLM.
 
     The built-in ``llm_query``/``llm_query_batched`` are registered as
-    speculatable+pure (per config flags). User tools are registered with their
-    classification (``speculate_user_tools`` master switch). The actual
+    speculatable+pure (per config flags) with COUNTER-FREE speculative
+    executors (see :func:`_make_llm_spec_fns`). User tools are registered with
+    their classification (``speculate_user_tools`` master switch). The actual
     functions are synced per-execution from the fresh ``repl.tools``.
     """
+    spec_fns = _make_llm_spec_fns(rlm) if rlm is not None else {}
     if config.speculate_llm_query:
         spec.registry.register(
             "llm_query",
@@ -124,6 +186,7 @@ def _register_classifications(
             pure=True,
             deterministic=False,
             latency_hint_ms=1000.0,
+            spec_fn=spec_fns.get("llm_query"),
         )
     if config.speculate_llm_query_batched:
         spec.registry.register(
@@ -133,6 +196,7 @@ def _register_classifications(
             pure=True,
             deterministic=False,
             latency_hint_ms=1000.0,
+            spec_fn=spec_fns.get("llm_query_batched"),
         )
     if tools:
         for name, tool in tools.items():
@@ -608,7 +672,7 @@ def enable_rlm_speculation(
         persistent_shadow=persistent_shadow,
         latency_aware=latency_aware,
     )
-    _register_classifications(spec, config, tools)
+    _register_classifications(spec, config, tools, rlm=rlm)
     _register_speculator(spec)
 
     original = rlm._execute_code
