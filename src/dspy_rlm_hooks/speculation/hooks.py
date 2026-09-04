@@ -22,6 +22,7 @@ batched path only for the elements that missed.
 from __future__ import annotations
 
 import asyncio
+import functools
 import time
 from typing import Any
 
@@ -242,6 +243,7 @@ def make_real_hooks(reg, store: SpecStore, launcher, bus=None) -> dict[str, Any]
             )
             continue
 
+        @functools.wraps(tool.fn)
         def hook(*args: Any, _tool=tool, **kwargs: Any):
             if not _tool.speculatable:
                 return _tool.fn(*args, **kwargs)
@@ -313,6 +315,7 @@ def _async_real_hook(tool: ToolSpec, reg, store: SpecStore, bus, launcher=None):
     ``asyncio.gather(...)``) — and a claim never blocks the caller's event
     loop, so sibling gather branches that MISSED still run concurrently."""
 
+    @functools.wraps(tool.fn)
     async def hook(*args: Any, _tool=tool, **kwargs: Any):
         if not _tool.speculatable:
             return await _tool.fn(*args, **kwargs)
