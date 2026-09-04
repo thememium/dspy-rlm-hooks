@@ -136,14 +136,21 @@ def _register_classifications(
         )
     if tools:
         for name, tool in tools.items():
-            fn = getattr(tool, "func", tool)
+            # Accepted forms: a plain callable, a dspy ``Tool`` (uses ``.func``),
+            # or a ``(callable, policy_kwargs)`` pair for per-tool overrides.
+            policy_kwargs: dict[str, Any] = {}
+            if isinstance(tool, tuple) and len(tool) == 2 and callable(tool[0]):
+                fn, policy_kwargs = tool
+                policy_kwargs = dict(policy_kwargs or {})
+            else:
+                fn = getattr(tool, "func", tool)
             spec.registry.register(
                 name,
                 fn,
                 speculatable=config.speculate_user_tools,
                 pure=config.speculate_user_tools,
-                deterministic=False,
-                latency_hint_ms=1000.0,
+                deterministic=bool(policy_kwargs.get("deterministic", False)),
+                latency_hint_ms=float(policy_kwargs.get("latency_hint_ms", 1000.0)),
             )
 
 

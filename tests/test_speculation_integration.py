@@ -846,3 +846,37 @@ def test_launcher_dispatch_never_runs_claim_hook(mock_rlm, mock_repl):
     assert dispatched.done.wait(5.0)  # resolves fast — no self-claim block
     assert dispatched.result() == 6
     assert real_calls == [3]  # the RAW tool ran once
+
+
+def test_tools_mapping_tuple_form_applies_policy():
+    """tools={"name": (fn, {"deterministic": True})} must register the CALLABLE
+    (not the tuple) and apply the policy kwargs (regression: the tuple was
+    silently stored as ToolSpec.fn and deterministic was dropped)."""
+    from unittest.mock import MagicMock
+
+    rlm = MagicMock()
+    rlm._execute_code = MagicMock(return_value="ok")
+    rlm._execute_iteration = MagicMock(return_value=MagicMock())
+    rlm._aexecute_iteration = MagicMock(return_value=MagicMock())
+    rlm._process_execution_result = MagicMock(return_value=MagicMock())
+    rlm.generate_action = MagicMock()
+    rlm.generate_action.acall = AsyncMock(return_value=MagicMock())
+    rlm.max_llm_calls = 50
+
+    def read_file(path):
+        return "x"
+
+    enable_rlm_speculation(
+        rlm,
+        tools={
+            "read_file": (read_file, {"deterministic": True, "latency_hint_ms": 42.0})
+        },
+        speculate_user_tools=True,
+    )
+    tool = rlm._speculator.registry.get("read_file")
+    assert tool is not None
+    assert callable(tool.fn)  # NOT the tuple
+    assert tool.fn.__name__ == "read_file"
+    assert tool.deterministic is True  # policy kwargs applied
+    assert tool.latency_hint_ms == 42.0
+    disable_rlm_speculation(rlm)
