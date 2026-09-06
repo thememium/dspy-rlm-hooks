@@ -528,6 +528,7 @@ def _maybe_begin_streaming_turn(
         return
     try:
         _sync_registry_fns(spec, repl)
+        rlm._spec_synced_this_iter = True
         # Reset per-forward() exec counter when a fresh REPL is detected.
         # The REPL is created anew each forward() call, so a different object
         # means we're starting a new run.
@@ -693,7 +694,11 @@ def _speculation_execute_code(
     # The FINAL code the real interpreter runs (persistent prelude + injected
     # vars), NOT the raw un-assembled code.
     assembled = _assemble_execution_code(repl, code)
-    _sync_registry_fns(spec, repl)
+    # Skip redundant sync when _maybe_begin_streaming_turn already synced this iteration.
+    # Use explicit `in __dict__` check: getattr on MagicMock would auto-create the attr.
+    if "_spec_synced_this_iter" not in self.__dict__ or not self._spec_synced_this_iter:
+        _sync_registry_fns(spec, repl)
+    self._spec_synced_this_iter = False
 
     # Reset per-forward() exec counter when a fresh REPL is detected
     # (non-streaming path: _maybe_begin_streaming_turn handles the streaming path).
