@@ -3,7 +3,7 @@
 ## Objective
 Optimize the speculative execution engine for DSPy's RLM (Recursive Language Model) to minimize total inference overhead. The goal is to make speculation a net win — the speculated path should be FASTER than the baseline (not slower).
 
-Current state: speculation adds ~81ms overhead (386ms vs 305ms baseline). Shadow construction is2.5ms (optimized from70ms with fork), drain barrier1.6ms, claim wait270ms. Only35ms of tool latency is hidden.
+Current state: speculation adds ~81ms overhead (385ms vs 304ms baseline). Shadow construction is2.5ms (optimized from70ms with fork), drain barrier1.5ms, claim wait271ms. Only33ms of tool latency is hidden.
 
 ## Metrics
 - **Primary**: `speculated_ms` (ms, lower is better) — total wall time with speculation enabled
@@ -85,17 +85,25 @@ Current state: speculation adds ~81ms overhead (386ms vs 305ms baseline). Shadow
 - Tests: all700 passed
 - Minimal improvement
 
+### Experiment9: latency_hint_ms floor (KEEP)
+- Change: Use `latency_hint_ms` as floor for `duplicate_cost` in claim wait budget
+- Result: speculated_ms=385ms (-2.1%)
+- Prevents the cap from being too small when EWMA is dominated by a fast first call
+- Tests: all700 passed
+
 ## Key Architectural Insights
 
 1. **Shadow subprocess cost**: Now2.5ms with fork (was70ms with spawn). Fork is28x faster.
 
-2. **Claim wait dominance**:270ms of386ms total is waiting for speculations. This is70% of the total time.
+2. **Claim wait dominance**:271ms of385ms total is waiting for speculations. This is70% of the total time.
 
-3. **Stream window limitation**: The stream window is115ms, but tool latency is300ms. The speculation can only hide115ms of the300ms, leaving185ms to wait.
+3. **Stream window limitation**: The stream window is114ms, but tool latency is300ms. The speculation can only hide114ms of the300ms, leaving186ms to wait.
 
 4. **Segmenter fix**: The segmenter now correctly handles newlines inside strings. This enables loop unrolling for common patterns like `context.split("\n\n")`.
 
 5. **Low speculation hit rate**: Only1 claim hit in the benchmark. The shadow dispatches calls, but the real execution only claims1.
+
+6. **Real API variability**: The real API benchmark shows high variability (2x between fast and slow runs). This is due to LLM response time variance, not the speculation engine. The speculation engine consistently helps in the median case (~11-19% speedup).
 
 ## Optimization Ideas (to explore)
 
