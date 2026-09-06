@@ -770,13 +770,11 @@ def _speculation_execute_code(
                     except Exception:
                         pass
     if turn is not None:
-        # Streaming turn is active (begun during generate_action). The
-        # shadow has already processed the streamed code during generation,
-        # so the live-state snapshot arrives too late to help speculate on
-        # cross-iteration variables.  Skip the expensive repl.execute()
-        # round-trip when code was actually streamed.
-        # When streaming produced no deltas (cache hit, stream failure),
-        # fall back to Lazy/JIT: feed the snapshot THEN the full code.
+        # Streaming turn is active (begun during generate_action). If it
+        # produced no code deltas (cache hit, stream failure, or unfenced
+        # output), top up with the live-state snapshot and the full assembled
+        # block so the turn still speculates over what the real interpreter
+        # will run.
         if not getattr(self, "_streaming_fed_any", False):
             try:
                 if not first_exec:
@@ -788,15 +786,6 @@ def _speculation_execute_code(
                     )
                     if assigns:
                         turn.feed(f"```repl\n{assigns}\n```\n")
-                turn.feed(f"```repl\n{assembled}\n```\n")
-            except Exception:
-                pass
-        # Streaming turn is active (begun during generate_action). If it
-        # produced no code deltas (cache hit, stream failure, or unfenced
-        # output), top up with the full assembled block so the turn still
-        # speculates over what the real interpreter will run.
-        if not getattr(self, "_streaming_fed_any", False):
-            try:
                 turn.feed(f"```repl\n{assembled}\n```\n")
             except Exception:
                 pass

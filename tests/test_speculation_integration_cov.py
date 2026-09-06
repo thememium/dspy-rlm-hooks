@@ -478,3 +478,155 @@ def test_disable_close_exception_swallowed(mock_rlm, mock_repl, monkeypatch):
     monkeypatch.setattr(spec, "close", boom)
     disable_rlm_speculation(mock_rlm)
     assert not hasattr(mock_rlm, "_speculator")
+
+
+# ---------------------------------------------------------------------------
+# _install_claim_hooks: signature hash error (lines 372-373)
+# ---------------------------------------------------------------------------
+
+
+def test_install_claim_hooks_sig_hash_error_keeps_registration(mock_rlm, mock_repl):
+    """A tool whose signature cannot be stringified leaves tool registration
+    untouched (sig_hash falls back to None)."""
+
+    class _EvilSig:
+        def __str__(self):
+            raise RuntimeError("sig boom")
+
+    def lookup_price(x):
+        return x * 2
+
+    setattr(lookup_price, "__signature__", _EvilSig())
+
+    tools = {"llm_query": lambda p: p, "lookup_price": lookup_price}
+    mock_rlm.max_llm_calls = 50
+    mock_repl.tools = tools
+    mock_repl._tools_registered = True
+    mock_rlm._execute_code = _real_execute_code
+    enable_rlm_speculation(
+        mock_rlm, tools={"lookup_price": lookup_price}, speculate_user_tools=True
+    )
+    spec = mock_rlm._speculator
+    config = mock_rlm._speculation_config
+
+    _install_claim_hooks(mock_repl, spec, config, mock_rlm)
+
+    assert mock_repl._tools_registered is True
+    # MagicMock auto-creates attributes, so check __dict__ explicitly.
+    assert "_spec_last_tool_sig_hash" not in mock_rlm.__dict__
+
+
+# ---------------------------------------------------------------------------
+# _snapshot_reads / _pure_assigned_names (lines 429-430, 457, 459-460)
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_reads_import_bound_names_are_not_required():
+    """A name bound by an import statement is not a snapshot-required read."""
+    import ast
+
+    from dspy_rlm_hooks.speculation_integration import _snapshot_reads
+
+    tree = ast.parse("import time\nstamp = time.perf_counter()\n")
+    assert _snapshot_reads(tree) == set()
+
+
+def test_pure_assigned_names_covers_assign_and_imports():
+    """Assign targets not read in their own value and import aliases are pure."""
+    import ast
+
+    from dspy_rlm_hooks.speculation_integration import _pure_assigned_names
+
+    tree = ast.parse("a = 1\nb = a + 1\nimport os\nfrom json import dumps as jd\n")
+    assert _pure_assigned_names(tree) == {"a", "b", "os", "jd"}
+
+
+# ---------------------------------------------------------------------------
+# _live_state_seed early returns (lines 489, 504-506, 517, 528)
+# ---------------------------------------------------------------------------
+
+
+def _seed_setup(mock_rlm, mock_repl):
+    mock_rlm.max_llm_calls = 50
+    mock_repl.tools = {"llm_query": lambda p: p}
+    mock_rlm._execute_code = _real_execute_code
+    enable_rlm_speculation(mock_rlm, streaming=False)
+    return mock_rlm._speculator
+
+
+def test_live_state_seed_skips_pure_assigned_reads(mock_rlm, mock_repl):
+    """A name read before it is purely assigned later needs no snapshot."""
+    from dspy_rlm_hooks.speculation_integration import _live_state_seed
+
+    spec = _seed_setup(mock_rlm, mock_repl)
+    mock_repl.execute = MagicMock(return_value="None")
+
+    seed = _live_state_seed(mock_repl, "z = w\nw = 1\n", {}, spec)
+
+    assert seed == {}
+    assert mock_repl.execute.call_count == 0
+
+
+def test_live_state_seed_skips_loop_targets(mock_rlm, mock_repl):
+    """Loop targets over a non-empty literal need no snapshot."""
+    from dspy_rlm_hooks.speculation_integration import _live_state_seed
+
+    spec = _seed_setup(mock_rlm, mock_repl)
+    mock_repl.execute = MagicMock(return_value="None")
+
+    code = "for i in [1, 2]:\n    pass\ny = llm_query(i)\n"
+    seed = _live_state_seed(mock_repl, code, {}, spec)
+
+    assert seed == {}
+    assert mock_repl.execute.call_count == 0
+
+
+def test_live_state_seed_non_dict_probe_result(mock_rlm, mock_repl):
+    """A probe whose output does not literal_eval to a dict is discarded."""
+    from dspy_rlm_hooks.speculation_integration import _live_state_seed
+
+    spec = _seed_setup(mock_rlm, mock_repl)
+    mock_repl.execute = MagicMock(return_value="None")
+
+    seed = _live_state_seed(mock_repl, "y = llm_query(q)\n", {}, spec)
+
+    assert seed == {}
+    assert mock_repl.execute.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# _speculation_execute_code: streaming top-up feeds the live snapshot (783-790)
+# ---------------------------------------------------------------------------
+
+
+def test_execute_code_streaming_top_up_feeds_live_snapshot(mock_rlm, mock_repl):
+    """A streaming turn with no streamed deltas on a non-first execution feeds
+    the live-state snapshot assigns, then the assembled block, into the turn."""
+    import builtins as _builtins
+
+    from dspy_rlm_hooks.speculation.shadow import shadow_builtins
+
+    tools = {"llm_query": lambda p: f"r:{p}"}
+    _setup_real(mock_rlm, mock_repl, tools)
+    enable_rlm_speculation(mock_rlm, streaming=True)
+    spec = mock_rlm._speculator
+
+    mock_repl.execute = MagicMock(return_value="{'val': \"'hello'\"}")
+
+    turn = spec.session.begin_stream_turn({}, shadow_builtins(dict(_builtins.__dict__)))
+    mock_rlm._active_stream_turn = turn
+    mock_rlm._streaming_fed_any = False
+    mock_rlm._spec_exec_count = 1
+    mock_rlm._spec_last_repl = mock_repl
+    mock_rlm._spec_synced_this_iter = True
+
+    try:
+        result = mock_rlm._execute_code(mock_repl, "x = llm_query(val)\n", {})
+        assert result == "{'val': \"'hello'\"}"
+        assert mock_rlm._active_stream_turn is None
+        # the snapshot assign fed the shadow: llm_query(val) was dispatched
+        assert any(
+            s.key[0] == "llm_query" for s in mock_rlm._speculator.session.store.all
+        )
+    finally:
+        turn.end(timeout=5)

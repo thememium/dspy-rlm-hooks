@@ -733,3 +733,24 @@ def test_handle_plans_retracts_stale_peek_bets():
     runner.finish()
     assert runner.join(10)
     assert len(store) == 0  # stale peek bets evicted via evict_unadopted_peeks
+
+
+# -- _mp_context fork fallback (lines 211-213) ---------------------------------
+
+
+def test_mp_context_falls_back_when_fork_unavailable(monkeypatch):
+    """A platform without fork (Windows) falls back to the default context."""
+    import multiprocessing
+
+    from dspy_rlm_hooks.speculation import shadow
+
+    real_get_context = multiprocessing.get_context
+
+    def fake_get_context(name=None):
+        if name == "fork":
+            raise ValueError("fork is not available on this platform")
+        return real_get_context(name)
+
+    monkeypatch.setattr(multiprocessing, "get_context", fake_get_context)
+    ctx = shadow._mp_context()
+    assert ctx.get_start_method() != "fork"
