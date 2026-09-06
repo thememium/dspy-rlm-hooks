@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1.12 (2026-09-06)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.11...v0.1.12)
+
+### 🔥 Performance
+
+- Enhance speculation performance with benchmarks and optimizations (#9) (#9, #7, #8) ([c7df440](https://github.com/thememium/dspy-rlm-hooks/commit/c7df44007173685bd94b20de6ee20eb735220e00))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
 ## v0.1.11 (2026-09-03)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.10...v0.1.11)
