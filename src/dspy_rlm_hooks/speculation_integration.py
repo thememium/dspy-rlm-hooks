@@ -758,22 +758,27 @@ def _speculation_execute_code(
                     except Exception:
                         pass
     if turn is not None:
-        # Cross-iteration sync: the turn was seeded with input_args before
-        # generation; variables created by EARLIER iterations are unknown to
-        # the persistent worker. Re-hydrate the live snapshot as assignments
-        # BEFORE the code so in-flight speculation sees current values.
-        if not first_exec:
+        # Streaming turn is active (begun during generate_action). The
+        # shadow has already processed the streamed code during generation,
+        # so the live-state snapshot arrives too late to help speculate on
+        # cross-iteration variables.  Skip the expensive repl.execute()
+        # round-trip when code was actually streamed.
+        # When streaming produced no deltas (cache hit, stream failure),
+        # fall back to Lazy/JIT: feed the snapshot THEN the full code.
+        if not getattr(self, "_streaming_fed_any", False):
             try:
-                snap = _live_state_seed(repl, code, input_args, spec)
-                assigns = "".join(
-                    f"{name} = {value!r}\n"
-                    for name, value in snap.items()
-                    if name not in input_args
-                )
-                if assigns:
-                    turn.feed(f"```repl\n{assigns}\n```\n")
+                if not first_exec:
+                    snap = _live_state_seed(repl, code, input_args, spec)
+                    assigns = "".join(
+                        f"{name} = {value!r}\n"
+                        for name, value in snap.items()
+                        if name not in input_args
+                    )
+                    if assigns:
+                        turn.feed(f"```repl\n{assigns}\n```\n")
+                turn.feed(f"```repl\n{assembled}\n```\n")
             except Exception:
-                pass  # snapshot errors are SAFE: real execution is unaffected
+                pass
         # Streaming turn is active (begun during generate_action). If it
         # produced no code deltas (cache hit, stream failure, or unfenced
         # output), top up with the full assembled block so the turn still
