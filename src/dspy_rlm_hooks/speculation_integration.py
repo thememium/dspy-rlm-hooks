@@ -376,8 +376,11 @@ _SNAPSHOT_MAX_VALUE_CHARS = 100_000
 _SNAPSHOT_PROBE = (
     "import json as _spec_json\n"
     "_spec_out = {}\n"
-    "for _spec_k, _spec_v in list(globals().items()):\n"
+    "for _spec_k in _spec_requested:\n"
     "    try:\n"
+    "        if _spec_k not in globals():\n"
+    "            continue\n"
+    "        _spec_v = globals()[_spec_k]\n"
     "        if _spec_k.startswith('_') or callable(_spec_v) or isinstance(_spec_v, type(_spec_json)):\n"
     "            continue\n"
     "        _spec_r = repr(_spec_v)\n"
@@ -387,6 +390,26 @@ _SNAPSHOT_PROBE = (
     "        pass\n"
     "print(_spec_json.dumps(_spec_out))\n"
 )
+
+
+def _snapshot_reads(tree: ast.Module) -> set[str]:
+    required: set[str] = set()
+    bound: set[str] = set()
+    for statement in tree.body:
+        reads = _free_names(statement)
+        for node in ast.walk(statement):
+            if isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+                reads.add(node.target.id)
+        required.update(reads - bound)
+        if isinstance(statement, ast.Assign):
+            bound.update(
+                target.id
+                for target in statement.targets
+                if isinstance(target, ast.Name)
+            )
+        else:
+            bound.clear()
+    return required
 
 
 def _live_state_seed(
@@ -401,14 +424,17 @@ def _live_state_seed(
     """
     seed = dict(input_args)
     try:
-        free = _free_names(ast.parse(code))
+        free = _snapshot_reads(ast.parse(code))
     except (SyntaxError, ValueError):
         return seed
     tool_names = set(spec.registry.names()) if spec.registry else set()
-    if not (free - seed.keys() - tool_names - set(dir(builtins))):
+    requested = free - seed.keys() - tool_names - set(dir(builtins))
+    if not requested:
         return seed
     try:
-        out = repl.execute(_SNAPSHOT_PROBE)
+        out = repl.execute(
+            f"_spec_requested = {sorted(requested)!r}\n" + _SNAPSHOT_PROBE
+        )
         line = out.strip().splitlines()[-1] if out and out.strip() else ""
         snap = json.loads(line)
     except Exception:
@@ -416,7 +442,7 @@ def _live_state_seed(
     if not isinstance(snap, dict):
         return seed
     for k, r in snap.items():
-        if k in seed or k in tool_names:
+        if k not in requested:
             continue
         if not isinstance(r, str) or len(r) > _SNAPSHOT_MAX_VALUE_CHARS:
             continue
