@@ -8,19 +8,19 @@ cd "$(dirname "$0")/.."
 
 OUTPUT=$(uv run python benchmarks/overlap_sim.py 2>&1)
 
-# Parse metrics from the benchmark output
-BASELINE=$(echo "$OUTPUT" | grep "baseline real call" | awk '{print $NF}' | sed 's/ms//')
-SPECULATED=$(echo "$OUTPUT" | grep "speculated: streamed" | awk '{print $NF}' | sed 's/ms//')
-STREAM=$(echo "$OUTPUT" | grep "stream window" | awk '{print $NF}' | sed 's/ms//')
-DRAIN=$(echo "$OUTPUT" | grep "drain:" | awk '{print $NF}' | sed 's/ms//')
-CLAIM_WAIT=$(echo "$OUTPUT" | grep "real-path claim wait" | awk '{print $NF}' | sed 's/ms//')
-HIDDEN=$(echo "$OUTPUT" | grep "tool latency hidden" | awk '{print $NF}' | sed 's/ms//')
-HITS=$(echo "$OUTPUT" | grep "claim hits/misses" | awk '{print $NF}' | sed 's/,/\//')
+# Parse metrics from the benchmark output (format: "label:   123.4 ms")
+BASELINE=$(echo "$OUTPUT" | grep "baseline real call" | awk '{print $(NF-1)}')
+SPECULATED=$(echo "$OUTPUT" | grep "speculated: streamed" | awk '{print $(NF-1)}')
+STREAM=$(echo "$OUTPUT" | grep "stream window" | awk '{print $(NF-1)}')
+DRAIN=$(echo "$OUTPUT" | grep "drain:" | awk '{print $(NF-1)}')
+CLAIM_WAIT=$(echo "$OUTPUT" | grep "real-path claim wait" | awk '{print $(NF-1)}')
+HIDDEN=$(echo "$OUTPUT" | grep "tool latency hidden" | awk '{print $(NF-1)}')
+HITS=$(echo "$OUTPUT" | grep "claim hits/misses" | awk '{print $NF}')
 
 # Run the shadow overhead benchmark and extract construction time
 OVERHEAD_OUTPUT=$(uv run python benchmarks/shadow_overhead.py 2>&1)
-CONSTRUCT_5MB=$(echo "$OVERHEAD_OUTPUT" | grep "ShadowRunner(5 MB" | awk '{print $(NF-1)}')
-DRAIN_BARRIER=$(echo "$OVERHEAD_OUTPUT" | grep "drain barrier" | awk '{print $(NF-1)}')
+CONSTRUCT_5MB=$(echo "$OVERHEAD_OUTPUT" | grep "ShadowRunner(5 MB" | awk '{print $(NF-2)}')
+DRAIN_BARRIER=$(echo "$OVERHEAD_OUTPUT" | grep "drain barrier" | awk '{print $(NF-2)}')
 
 # Primary metric: total speculated time (ms) - lower is better
 echo "METRIC speculated_ms=${SPECULATED}"
