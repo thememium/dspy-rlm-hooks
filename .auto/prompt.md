@@ -39,4 +39,19 @@ The benchmarks use deterministic scripted scenarios (fixed tool latencies, no re
 - Speculation claimed/evicted counts should stay the same or improve
 
 ## What's Been Tried
-(Session starts fresh — no prior experiments yet.)
+
+### Kept Optimizations
+1. **Snapshot import recognition** (`_snapshot_reads`): `import X` is now recognized as a binding. Previously `import time` followed by `time.perf_counter` treated `time` as free, triggering an expensive REPL probe.
+2. **Pure-assigned name filter** (`_pure_assigned_names`): Filters names assigned without reading (e.g. `timings = {}`, `now = time.perf_counter`). Reduces snapshot probe scope.
+3. **First-iteration skip**: Skip `_live_state_seed` on the first `_execute_code` call per `forward()`. The REPL starts empty, so snapshot returns nothing.
+4. **Faster snapshot probe**: Use `repr()` instead of `json.dumps` in the sandbox probe, `ast.literal_eval` instead of `json.loads` for parsing. 24% faster per probe.
+
+### Key Findings
+- **DSPy REPL subprocess is the bottleneck**: 777ms on iteration 0 (Deno subprocess startup). This is DSPy's PythonInterpreter, not dspy-rlm-hooks. Cannot optimize from this package.
+- **Speculation engine overhead is minimal**: ~3-5ms per iteration (shadow prep + drain + hooks). Not worth further optimization.
+- **Tool latencies dominate iterations 1-2**: Already optimized by speculation (critical path overlap).
+- **All speculation engine internals are µs-level**: StreamSegmenter ~130µs, safe_eval ~1µs, plan_peeks ~60µs, classify_ns ~1µs.
+
+### Dead Ends
+- **REPL reuse across forward() calls**: Would save subprocess restart but changes RLM semantics (state leakage). Not safe as default behavior.
+- **For-loop target in `_pure_assigned_names`**: Too aggressive — empty loops don't overwrite the variable. Test failure confirmed.
