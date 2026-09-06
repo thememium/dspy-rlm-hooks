@@ -374,21 +374,17 @@ def _install_claim_hooks(
 _SNAPSHOT_MAX_VALUE_CHARS = 100_000
 
 _SNAPSHOT_PROBE = (
-    "import json as _spec_json\n"
     "_spec_out = {}\n"
     "for _spec_k in _spec_requested:\n"
     "    try:\n"
-    "        if _spec_k not in globals():\n"
-    "            continue\n"
-    "        _spec_v = globals()[_spec_k]\n"
-    "        if _spec_k.startswith('_') or callable(_spec_v) or isinstance(_spec_v, type(_spec_json)):\n"
-    "            continue\n"
-    "        _spec_r = repr(_spec_v)\n"
-    "        if len(_spec_r) <= 100000:\n"
-    "            _spec_out[_spec_k] = _spec_r\n"
+    "        _spec_v = globals().get(_spec_k)\n"
+    "        if _spec_v is not None and not callable(_spec_v) and not isinstance(_spec_v, type):\n"
+    "            _spec_r = repr(_spec_v)\n"
+    "            if len(_spec_r) <= 100000:\n"
+    "                _spec_out[_spec_k] = _spec_r\n"
     "    except Exception:\n"
     "        pass\n"
-    "print(_spec_json.dumps(_spec_out))\n"
+    "print(repr(_spec_out))\n"
 )
 
 
@@ -482,7 +478,7 @@ def _live_state_seed(
             f"_spec_requested = {sorted(requested)!r}\n" + _SNAPSHOT_PROBE
         )
         line = out.strip().splitlines()[-1] if out and out.strip() else ""
-        snap = json.loads(line)
+        snap = ast.literal_eval(line)
     except Exception:
         return seed
     if not isinstance(snap, dict):
