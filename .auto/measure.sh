@@ -1,34 +1,46 @@
 #!/bin/bash
 set -euo pipefail
+
+# Run the deterministic A/B benchmark with enough repeats for stable medians.
+# pace-ms=0 removes simulated token-arrival delay (pure framework overhead).
+# tool-ms=60, llm-ms=150 match the default scenario.
 cd "$(dirname "$0")/.."
 
-# Run the overlap benchmark (3 iterations for stability) and extract metrics.
-# Primary metric: total speculated wall time (lower is better).
-# This captures the end-to-end overhead of the speculation engine.
+# Run benchmark, capture JSON output
+python -m dspy_rlm_hooks.benchmark \
+    --variants default spec \
+    --repeats 5 \
+    --pace-ms 0.1 \
+    --json-out .auto/bench-result.json 2>/dev/null
 
-OUTPUT=$(uv run python benchmarks/overlap_sim.py 2>&1)
+# Parse medians from JSON
+python3 -c "
+import json, sys
+with open('.auto/bench-result.json') as f:
+    r = json.load(f)
+for vname, vdata in r['variants'].items():
+    w = vdata['wall_s']['median']
+    e = vdata['execute_ms_total']['median']
+    g = vdata['generate_ms_total']['median']
+    tc = vdata['tool_critical_ms']['median']
+    ts = vdata['tool_serial_ms']['median']
+    print(f'[{vname}] wall={w:.3f}s exec={e:.1f}ms gen={g:.1f}ms tool_crit={tc:.1f}ms tool_serial={ts:.1f}ms')
 
-# Parse metrics from the benchmark output (format: "label:   123.4 ms")
-BASELINE=$(echo "$OUTPUT" | grep "baseline real call" | awk '{print $(NF-1)}')
-SPECULATED=$(echo "$OUTPUT" | grep "speculated: streamed" | awk '{print $(NF-1)}')
-STREAM=$(echo "$OUTPUT" | grep "stream window" | awk '{print $(NF-1)}')
-DRAIN=$(echo "$OUTPUT" | grep "drain:" | awk '{print $(NF-1)}')
-CLAIM_WAIT=$(echo "$OUTPUT" | grep "real-path claim wait" | awk '{print $(NF-1)}')
-HIDDEN=$(echo "$OUTPUT" | grep "tool latency hidden" | awk '{print $(NF-1)}')
-HITS=$(echo "$OUTPUT" | grep "claim hits/misses" | awk '{print $NF}')
+# Primary metric: spec variant wall time (lower is better)
+spec_wall = r['variants']['spec']['wall_s']['median']
+default_wall = r['variants']['default']['wall_s']['median']
+speedup = default_wall / spec_wall if spec_wall > 0 else 0
 
-# Run the shadow overhead benchmark and extract construction time
-OVERHEAD_OUTPUT=$(uv run python benchmarks/shadow_overhead.py 2>&1)
-CONSTRUCT_5MB=$(echo "$OVERHEAD_OUTPUT" | grep "ShadowRunner(5 MB" | awk '{print $(NF-2)}')
-DRAIN_BARRIER=$(echo "$OVERHEAD_OUTPUT" | grep "drain barrier" | awk '{print $(NF-2)}')
+print(f'METRIC wall_s={spec_wall:.3f}')
+print(f'METRIC default_wall_s={default_wall:.3f}')
+print(f'METRIC speedup={speedup:.3f}')
+print(f'METRIC exec_ms={r[\"variants\"][\"spec\"][\"execute_ms_total\"][\"median\"]:.1f}')
+print(f'METRIC gen_ms={r[\"variants\"][\"spec\"][\"generate_ms_total\"][\"median\"]:.1f}')
+print(f'METRIC tool_crit_ms={r[\"variants\"][\"spec\"][\"tool_critical_ms\"][\"median\"]:.1f}')
 
-# Primary metric: total speculated time (ms) - lower is better
-echo "METRIC speculated_ms=${SPECULATED}"
-echo "METRIC baseline_ms=${BASELINE}"
-echo "METRIC stream_ms=${STREAM}"
-echo "METRIC drain_ms=${DRAIN}"
-echo "METRIC claim_wait_ms=${CLAIM_WAIT}"
-echo "METRIC hidden_ms=${HIDDEN}"
-echo "METRIC claim_hits=${HITS}"
-echo "METRIC construct_5mb_ms=${CONSTRUCT_5MB}"
-echo "METRIC drain_barrier_ms=${DRAIN_BARRIER}"
+# Check step equivalence
+equiv = r.get('equivalent_steps', True)
+print(f'STEPS_EQUIVALENT={equiv}')
+if not equiv:
+    print('WARNING: Steps differ across variants!', file=sys.stderr)
+"
