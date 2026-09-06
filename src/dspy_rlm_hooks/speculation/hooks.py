@@ -86,7 +86,11 @@ def _claim_wait_budget(spec: Speculation, tool: ToolSpec, launcher: Any) -> floa
         return _MAX_CLAIM_WAIT_S
     ceiling = float(getattr(launcher, "max_claim_wait_s", _MAX_CLAIM_WAIT_S))
     ewma_s = launcher.ewma_ms(tool.name, tool.latency_hint_ms) / 1000.0
-    duplicate_cost = max(ewma_s, 0.05)
+    # Use the hint as a floor for the duplicate cost — the EWMA can be
+    # dominated by a fast first call, making the cap too small for slower
+    # subsequent calls.
+    hint_s = tool.latency_hint_ms / 1000.0
+    duplicate_cost = max(ewma_s, hint_s, 0.05)
     if spec.state == "running":
         # elapsed measured from WORKER START: dispatched_at includes queue
         # time, which would understate the remaining run budget.
