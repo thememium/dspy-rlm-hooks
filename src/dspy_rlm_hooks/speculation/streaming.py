@@ -299,8 +299,12 @@ def _scan_line_state(
             depth = max(0, depth - 1)
         k += 1
     # single-quote strings don't span physical lines (unless backslash — rare; ignored)
+    # EXCEPT when the string contains an unescaped newline (e.g., "\n\n"),
+    # which means the string literal spans multiple physical lines.
     if in_str is not None and in_str not in ('"""', "'''"):
-        in_str = None
+        # Check if the string is still open (no closing quote found)
+        # If so, keep tracking it across lines
+        pass  # Don't reset - let the string span across lines
     return depth, in_str
 
 

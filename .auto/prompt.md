@@ -1,9 +1,9 @@
 # Autoresearch: RLM Speculation Speed
 
 ## Objective
-Optimize the speculative execution engine for DSPy's RLM (Recursive Language Model) to minimize total inference overhead. The goal is to make speculation a net win — the speculated path should be FASTER than the baseline (no speculation), not slower.
+Optimize the speculative execution engine for DSPy's RLM (Recursive Language Model) to minimize total inference overhead. The goal is to make speculation a net win — the speculated path should be FASTER than the baseline (not slower).
 
-Current state: speculation ADDS ~87ms overhead (389ms vs 302ms baseline). The shadow construction is ~70ms, drain barrier ~10ms, and only 28ms of tool latency is hidden under streaming. The claim wait is 274ms (the real execution waits for speculations to finish).
+Current state: speculation adds ~87ms overhead (388ms vs 301ms baseline). Shadow construction is2.5ms (optimized from70ms with fork), drain barrier1.5ms, claim wait272ms. Only29ms of tool latency is hidden.
 
 ## Metrics
 - **Primary**: `speculated_ms` (ms, lower is better) — total wall time with speculation enabled
@@ -30,28 +30,72 @@ Current state: speculation ADDS ~87ms overhead (389ms vs 302ms baseline). The sh
 - Test files — only modify if a test is genuinely wrong
 
 ## Constraints
-- All 700 tests must pass (`uv run pytest tests/ -v`)
+- All700 tests must pass (`uv run pytest tests/ -v`)
 - No new dependencies (use only stdlib + existing deps)
 - Speculation correctness: claimed results must be byte-identical to real execution
 - The shadow subprocess isolation boundary must be preserved (security)
 - Async tools must keep working (asyncio event loop integration)
 
 ## What's Been Tried
-(Starting fresh — no experiments yet)
+
+### Experiment1: Baseline
+- Result: speculated_ms=393.4ms (baseline305ms)
+- Overhead:88ms from shadow construction (70ms), drain (10ms), claim wait (276ms)
+
+### Experiment2: Fork optimization (KEEP)
+- Change: Use fork instead of spawn for shadow subprocess
+- Result: speculated_ms=388.1ms (-1.3%)
+- Shadow construction reduced from70ms to2.5ms (28x faster)
+- Drain barrier reduced from10ms to1.5ms
+- Tests: all700 passed
+
+### Experiment3: Aggressive claim wait budget (DISCARD)
+- Change: Reduce claim wait multiplier from1.5x to0.5x
+- Result: speculated_ms=387.1ms (-1.6%)
+- Tests:1 failed (test_sync_batched_hook_waits_for_inflight_element)
+- The test expects speculations to be waited for
+
+### Experiment4: Moderate claim wait budget (DISCARD)
+- Change: Reduce claim wait multiplier from1.5x to1.0x
+- Result: speculated_ms=392.9ms (-0.1%)
+- Tests:1 failed (same test)
+
+### Experiment5: Non-blocking drain (DISCARD)
+- Change: Use shorter timeout for drain barrier
+- Result: speculated_ms=387.9ms (-1.4%)
+- Tests: all700 passed
+- Minimal improvement because drain is already fast (0.2ms)
 
 ## Key Architectural Insights
-1. **Shadow subprocess cost**: ~70ms to spawn + classify + transfer namespace. Persistent shadow reuses across turns but still spawns once per RLM run.
-2. **Drain barrier**: StreamTurn.end() waits for worker to process all messages (~10ms). This blocks real execution.
-3. **Claim wait dominance**: 274ms of the 389ms total is waiting for speculations to resolve. This means the speculation is NOT hiding latency — it's adding it.
-4. **Low hit rate**: Only 1 claim hit in the benchmark. The shadow dispatches but the real execution doesn't benefit.
-5. **Pipe overhead**: Every segment/peek goes through multiprocessing.Pipe — serialization + context switch per message.
+
+1. **Shadow subprocess cost**: Now2.5ms with fork (was70ms with spawn). Fork is28x faster.
+
+2. **Claim wait dominance**:272ms of388ms total is waiting for speculations. This is70% of the total time.
+
+3. **Stream window limitation**: The stream window is117ms, but tool latency is300ms. The speculation can only hide117ms of the300ms, leaving183ms to wait.
+
+4. **Segmenter bug with multi-line strings**: The segmenter treats newlines inside string literals (e.g., `"\n\n"`) as line breaks, preventing loop unrolling for common patterns like `context.split("\n\n")`.
+
+5. **Low speculation hit rate**: Only1 claim hit in the benchmark. The shadow can't unroll loops because it doesn't have the iterator value at peek time.
 
 ## Optimization Ideas (to explore)
-1. **Thread-based shadow** instead of subprocess: eliminates spawn overhead, uses shared memory directly. Trade-off: weaker isolation (but tools are pure by definition).
-2. **Batch pipe messages**: send multiple segments/peek plans in one message instead of one-at-a-time.
-3. **Overlap drain with real execution start**: begin real execution before drain completes (risky but could save 10ms).
-4. **Reduce namespace serialization**: only pickle values that changed since last turn.
-5. **Pre-dispatch before streaming starts**: begin speculation as soon as the RLM iteration starts, not after first tokens arrive.
-6. **Increase speculation parallelism**: dispatch more speculations concurrently (currently capped at max_inflight=8).
-7. **Speculative claim without wait**: return immediately if speculation is still running, let the real execution proceed and claim later.
-8. **Cache-friendly namespace transfer**: use shared memory (multiprocessing.shared_memory) instead of pickle+pipe for large namespaces.
+
+1. **Fix segmenter string handling**: Make the segmenter track quote state so it correctly handles newlines inside strings. This would enable loop unrolling for common patterns.
+
+2. **Pre-dispatch based on history**: Start speculating before code is generated by predicting tool calls from the RLM's iteration history.
+
+3. **Shared memory for namespace transfer**: Use `multiprocessing.shared_memory` instead of pickle+pipe for large namespaces.
+
+4. **Batch pipe messages**: Accumulate multiple messages and send them in one batch to reduce per-message overhead.
+
+5. **Non-blocking drain**: Start real execution before the shadow finishes processing all messages. Accept more misses in exchange for lower overhead.
+
+6. **Speculative claim without wait**: Return immediately if speculation isn't ready, let real execution proceed and claim later. Trade speculation wins for lower latency.
+
+7. **Thread-based shadow**: Replace subprocess with thread for even faster shadow construction (already using fork, which is2.5ms).
+
+8. **Lazy namespace classification**: Only pickle values that are actually used by the shadow, not the entire namespace.
+
+9. **Cache-friendly data structures**: Use numpy arrays or memoryviews for large data to reduce pickle overhead.
+
+10. **Speculation budget tuning**: Dynamically adjust speculation budget based on observed hit rate and latency.
