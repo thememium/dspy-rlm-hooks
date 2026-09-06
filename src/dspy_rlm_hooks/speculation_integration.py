@@ -359,7 +359,20 @@ def _install_claim_hooks(
                 setattr(claim_hook, "__signature__", sig)
             tools[name] = tag_claim_hook(claim_hook, raw_fn=raw)
     if hasattr(repl, "_tools_registered"):
-        repl._tools_registered = False
+        # Only force tool re-registration when tool signatures actually changed.
+        # _register_tools sends a JSON-RPC message to the sandbox (~0.6ms per
+        # call with tools). Since claim hooks preserve the raw tool's signature,
+        # re-registration is a no-op when the tool set is stable across iterations.
+        try:
+            sig_hash = hash(tuple(
+                (name, str(getattr(tools[name], "__signature__", None)))
+                for name in sorted(tools)
+            ))
+        except Exception:
+            sig_hash = None
+        if sig_hash is not None and sig_hash != getattr(rlm, "_spec_last_tool_sig_hash", None):
+            rlm._spec_last_tool_sig_hash = sig_hash
+            repl._tools_registered = False
 
 
 # -- cross-iteration state sync -----------------------------------------------
