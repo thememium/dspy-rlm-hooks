@@ -1,25 +1,22 @@
 # Ideas Backlog
 
-## Applied Optimizations (Cumulative ~2-3% improvement)
-- **Snapshot import recognition**: `_snapshot_reads` treats `import X` as binding
-- **Pure-assigned name filter**: `_pure_assigned_names` filters non-read assignments
-- **First-iteration skip**: Skip snapshot on first `_execute_code` per `forward()`
-- **Faster snapshot probe**: repr-based instead of json-based (24% faster per probe)
-- **Skip redundant tool registration**: Track tool signature hashes, only re-register when changed
+## Applied Optimizations (8 total, ~2.4% improvement)
+1. **Snapshot import recognition**: `_snapshot_reads` treats `import X` as binding
+2. **Pure-assigned name filter**: `_pure_assigned_names` filters non-read assignments
+3. **First-iteration skip**: Skip snapshot on first `_execute_code` per `forward()`
+4. **Faster snapshot probe**: repr-based instead of json-based (24% faster per probe)
+5. **Skip redundant tool registration**: Track tool signature hashes, only re-register when changed
+6. **Skip redundant registry sync**: `_sync_registry_fns` called once per iteration instead of twice
+7. **Loop-target snapshot skip**: Skip snapshot for loop targets over non-empty iterables
+8. **Skip snapshot in streaming path**: Shadow already processed code during generate_action
 
-## Remaining Bottlenecks (Not Optimizable)
-- **DSPy REPL subprocess startup**: 777ms on iteration 0 — Deno subprocess creation. Requires DSPy-level changes.
-- **repl.execute() for snapshot**: ~1ms per iteration — subprocess IPC overhead. Unavoidable for cross-iteration state.
-- **Tool latencies**: ~395ms (spec) / ~882ms (default) — already optimized by speculation
+## Final State
+- **Framework overhead**: 0.02% (0.3ms/1750ms) — effectively zero
+- **Remaining bottleneck**: DSPy REPL subprocess execution (99.98%)
+- **Speculation speedup**: 1.39× over default (tool call overlap)
 
-## Explored & Discarded
-- **REPL reuse across forward()**: Changes RLM semantics (state leakage)
-- **For-loop target in pure_assigned**: Empty loops don't overwrite — test failure
-- **Batch pipe messages**: Subprocess IPC is already µs-level
-- **AST parse cache**: Each segment has unique source — no cache hits
-- **canonical_hash optimization**: Already ~1µs — not worth optimizing
-- **classify_ns caching**: Namespace is stable — re-seeding never happens in benchmark
+## Key Finding
+The snapshot probe was entirely wasted in the streaming path. The shadow processes code during `generate_action` (streaming), so by the time the snapshot runs in `_speculation_execute_code`, the shadow has already processed everything. The snapshot only helps in the Lazy/JIT path (non-streaming or stream failure).
 
-## If Starting Fresh
-- **Pre-compute snapshot at generate_action time**: Overlap snapshot with LLM generation. Complex but could hide the 1ms snapshot cost.
-- **Instrument PythonInterpreter startup**: Profile the 777ms Deno startup to find optimization opportunities in DSPy itself.
+## No Further Optimizations Available
+All speculation engine internals are at sub-0.1ms. The remaining 99.98% is DSPy's PythonInterpreter subprocess execution — requires DSPy-level changes.
