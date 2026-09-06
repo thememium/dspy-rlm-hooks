@@ -311,6 +311,42 @@ def test_batched_miss_runs_real_batched_path():
         session.close()
 
 
+def test_batched_kwargs_call_claims_per_element():
+    """A batched call passing the list as a KEYWORD (the interpreter's
+    generated code does this) takes the same per-element claim path instead of
+    bypassing speculation; the miss fallback keeps the kwarg call shape."""
+    single_calls: list[str] = []
+    batch_calls: list[list[str]] = []
+
+    def llm(prompt: str) -> str:
+        single_calls.append(prompt)
+        return f"r:{prompt}"
+
+    def llm_batched(prompts: list[str]) -> list[str]:
+        batch_calls.append(prompts)
+        return [f"r:{p}" for p in prompts]
+
+    reg = _reg(
+        llm_query=(llm, {"speculatable": True, "pure": True}),
+        llm_query_batched=(llm_batched, {"speculatable": True, "pure": True}),
+    )
+    session = SpecSession(reg)
+    try:
+        hooks = session.real_hooks()
+        single = reg.get("llm_query")
+        assert single is not None
+        # only "a" was speculated; "b" misses -> batched fn runs for the miss
+        spec = session.launcher.dispatch(single, ("a",), {}, "shadow")
+        assert spec is not None
+        assert spec.result(timeout=5) == "r:a"
+        out = hooks["llm_query_batched"](prompts=["a", "b"])
+        assert out == ["r:a", "r:b"]
+        assert single_calls == ["a"]
+        assert batch_calls == [["b"]]
+    finally:
+        session.close()
+
+
 # -- budget enforcement --------------------------------------------------------
 
 

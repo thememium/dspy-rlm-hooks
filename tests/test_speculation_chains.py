@@ -259,7 +259,7 @@ def test_llm_spec_fns_counter_free_and_registered():
     sub-LM directly (speculative runs must not consume the model's logical
     max_llm_calls budget) and reuse dspy's output extraction."""
     from types import SimpleNamespace
-    from unittest.mock import MagicMock
+    from unittest.mock import AsyncMock, MagicMock
 
     import dspy_rlm_hooks.speculation_integration as SI
 
@@ -284,9 +284,7 @@ def test_llm_spec_fns_counter_free_and_registered():
     rlm2._aexecute_iteration = MagicMock(return_value=MagicMock())
     rlm2._process_execution_result = MagicMock(return_value=MagicMock())
     rlm2.generate_action = MagicMock()
-    rlm2.generate_action.acall = __import__("unittest").mock.AsyncMock(
-        return_value=MagicMock()
-    )
+    rlm2.generate_action.acall = AsyncMock(return_value=MagicMock())
     rlm2.max_llm_calls = 50
     rlm2.sub_lm = FakeSubLM()
     SI.enable_rlm_speculation(

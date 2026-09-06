@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -164,3 +165,51 @@ def test_benchmark_cli_module_fn_variant():
         ]
     )
     assert rc == 0
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_scripted_generation_paces_every_variant(monkeypatch, streaming):
+    # Given identical code and a clock recording generation delays.
+    sleeps: list[float] = []
+    chunks: list[str] = []
+    monkeypatch.setattr(B.time, "sleep", sleeps.append)
+    turn = SimpleNamespace(feed=chunks.append) if streaming else None
+    program = SimpleNamespace(_active_stream_turn=turn)
+    scenario = B.Scenario("pacing", [B.ScriptedIteration("", "print(1)")], [])
+
+    # When the same generation runs with or without a speculative stream.
+    prediction = B._scripted_generate_action(program, scenario, 2.0)(None, None, "1/1")
+
+    # Then every chunk incurs the same simulated arrival delay.
+    assert sleeps == [0.002] * ((len(prediction.code) + 7) // 8)
+    assert "".join(chunks) == (prediction.code if streaming else "")
+
+
+def test_benchmark_honors_scenario_llm_budget():
+    # Given a scenario with a non-default sub-LM budget.
+    scenario = B.Scenario("budget", [], [], max_llm_calls=2)
+
+    # When its real DSPy program is constructed.
+    program, _ = B._build_program(scenario, B.TrialRecord())
+
+    # Then the configured limit reaches the program.
+    assert program.max_llm_calls == 2
+
+
+def test_benchmark_sums_repeated_timing_keys_across_iterations():
+    # Given two iterations reporting the same timing label.
+    scenario = B.Scenario(
+        "repeated-timings",
+        [
+            B.ScriptedIteration("", "print('TIMINGS {\"tool\": 7}')"),
+            B.ScriptedIteration("", "print('TIMINGS {\"tool\": 11}')"),
+            B.ScriptedIteration("", 'SUBMIT("ok")'),
+        ],
+        [],
+    )
+
+    # When both iterations run in the real interpreter.
+    result = B.run_variant(scenario, repeats=1, pace_ms=0)
+
+    # Then their critical path contributions are added, not overwritten.
+    assert result["tool_critical_ms"]["median"] == 18

@@ -306,7 +306,8 @@ def _scripted_generate_action(
 
     When a streaming turn is active (speculation enabled), the code is fed
     through the SAME production path (``StreamTurn.feed`` on chunk deltas) so
-    peek/dispatch overlap with generation is exercised honestly.
+    peek/dispatch overlap with generation is exercised honestly. Every variant
+    receives the same chunk-arrival delays, including the non-streaming baseline.
     """
 
     def generate_action(variables_info: Any, repl_history: Any, iteration: Any) -> Any:
@@ -316,10 +317,11 @@ def _scripted_generate_action(
         turn = getattr(rlm, "_active_stream_turn", None)
         if turn is not None:
             rlm._streaming_fed_any = True
-            for i in range(0, len(fenced), 8):
+        for i in range(0, len(fenced), 8):
+            if turn is not None:
                 turn.feed(fenced[i : i + 8])
-                if pace_ms > 0:
-                    time.sleep(pace_ms / 1000.0)
+            if pace_ms > 0:
+                time.sleep(pace_ms / 1000.0)
         from dspy import Prediction
 
         return Prediction(reasoning=it.reasoning, code=fenced)
@@ -416,7 +418,11 @@ def _build_program(
     }
     sub_lm = _FakeSubLM(scenario.llm_latency_ms, record.tool_events)
 
-    kwargs: dict[str, Any] = {"tools": list(tool_fns.values()), "sub_lm": sub_lm}
+    kwargs: dict[str, Any] = {
+        "tools": list(tool_fns.values()),
+        "sub_lm": sub_lm,
+        "max_llm_calls": scenario.max_llm_calls,
+    }
     params = inspect.signature(dspy.RLM.__init__).parameters
     iter_kw = "max_iters" if "max_iters" in params else "max_iterations"
     kwargs[iter_kw] = len(scenario.iterations)
@@ -492,7 +498,8 @@ def run_variant(
             )
         merged: dict = {}
         for ex in rec.exec:
-            merged.update(_parse_timings(ex["result"]))
+            for label, elapsed_ms in _parse_timings(ex["result"]).items():
+                merged[label] = merged.get(label, 0.0) + elapsed_ms
         rec.critical_path_ms = merged
 
         speculator = getattr(program, "_speculator", None)

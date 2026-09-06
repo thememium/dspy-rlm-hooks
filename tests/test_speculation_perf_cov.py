@@ -542,6 +542,40 @@ def test_claim_wait_budget_ceiling_without_launcher():
     assert _claim_wait_budget(spec, tool, None) == _MAX_CLAIM_WAIT_S
 
 
+def test_batched_claim_waits_run_concurrently():
+    """Two in-flight batch elements with ~equal budgets collect in MAX(budget)
+    time, not the sum — sequential waits would compound element deadlines."""
+    import time as _time
+
+    reg = ToolRegistry()
+
+    def llm_query(prompt: str) -> str:
+        _time.sleep(0.3)
+        return f"r:{prompt}"
+
+    def llm_query_batched(prompts: list) -> list:
+        return [f"r:{p}" for p in prompts]
+
+    reg.register("llm_query", llm_query, speculatable=True, pure=True)
+    reg.register("llm_query_batched", llm_query_batched, speculatable=True, pure=True)
+    store = SpecStore()
+    bus = EventBus()
+    launcher = Launcher(store, bus, latency_aware=True)
+    launcher.latency.record("llm_query", 300.0)
+    hooks = make_real_hooks(reg, store, launcher, bus)
+    single = reg.get("llm_query")
+    assert single is not None
+    for p in ("a", "b"):
+        s = launcher.dispatch(single, (p,), {}, "peek")
+        assert s is not None
+    t0 = time.monotonic()
+    out = hooks["llm_query_batched"](["a", "b"])
+    elapsed = time.monotonic() - t0
+    assert out == ["r:a", "r:b"]
+    # sequential waits would need >= 0.6s; concurrent collection <= ~0.35s
+    assert elapsed < 0.5, f"batch claims appear serialized: {elapsed:.2f}s"
+
+
 def test_claim_wait_budget_running_and_queued():
     tool = _tool(latency=1000.0)
     key = spec_key(tool, ("p",), {})
@@ -554,7 +588,12 @@ def test_claim_wait_budget_running_and_queued():
     assert 0 < b <= 1.0  # capped at 2x duplicate cost
     spec2 = Speculation(key=key, seq=2, args=("p",), kwargs={}, source="peek")
     spec2.state = "pending"
+    # the pool runs max_inflight (8) speculations in parallel: a depth-2 queue
+    # drains in ONE wave (~1 duplicate cost), so the budget is NOT zero
     launcher._queued = 2
+    assert _claim_wait_budget(spec2, tool, launcher) > 0.0
+    # deep enough for ceil((q + 1) / 8) = 3 waves: 1.5s > 1.5x duplicate cost
+    launcher._queued = 20
     assert _claim_wait_budget(spec2, tool, launcher) == 0.0  # queue too deep
     launcher._queued = 0
     assert _claim_wait_budget(spec2, tool, launcher) > 0.0
@@ -683,7 +722,9 @@ async def test_async_real_hook_hedges_immediately_and_after_timeout():
     await asyncio.sleep(0.02)
     out2 = await hooks2["llm_query"](prompt="q")
     assert out2 == "slow"
-    assert spec2.state == "evicted"
+    # after the budget miss the hook RACES a duplicate instead of rerunning:
+    # whichever resolves first wins, so the original may be claimed late
+    assert spec2.state in ("claimed", "evicted")
 
 
 async def test_async_batched_hook_hedges_elements():

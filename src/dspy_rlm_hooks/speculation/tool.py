@@ -111,6 +111,49 @@ def _canonical_call(tool: ToolSpec, args: tuple, kwargs: dict) -> tuple[tuple, d
         return args, kwargs
 
 
+def split_batch_call(
+    args: tuple, kwargs: dict
+) -> tuple[list, tuple, dict, str | None] | None:
+    """Extract the batch prompt list from a batched tool call.
+
+    A batched call (``llm_query_batched`` & friends) may pass its list of
+    prompts either as the first positional argument or as a keyword argument
+    (e.g. ``llm_query_batched(prompts=[...])``) — the interpreter's generated
+    code uses both styles. Returns ``(prompts, rest_args, clean_kwargs,
+    kwarg_name)`` where ``prompts`` is the extracted list, ``rest_args`` the
+    remaining positional args, ``clean_kwargs`` the kwargs with the prompts
+    entry removed, and ``kwarg_name`` the kwarg that held the list (``None``
+    for a positional batch). Returns ``None`` when no list-shaped argument is
+    found.
+    """
+    if args and isinstance(args[0], (list, tuple)):
+        return list(args[0]), tuple(args[1:]), dict(kwargs), None
+    if not kwargs:
+        return None
+    names = [k for k in ("prompts", "queries", "items", "inputs") if k in kwargs]
+    if len(names) == 1 and isinstance(kwargs[names[0]], (list, tuple)):
+        key = names[0]
+    else:
+        candidates = [k for k, v in kwargs.items() if isinstance(v, (list, tuple))]
+        if len(candidates) != 1:
+            return None
+        key = candidates[0]
+    prompts = list(kwargs[key])
+    clean = {k: v for k, v in kwargs.items() if k != key}
+    return prompts, tuple(args), clean, key
+
+
+def rejoin_batch_call(
+    prompts: list, rest: tuple, clean: dict, kwarg_name: str | None
+) -> tuple[tuple, dict]:
+    """Rebuild a real batched-tool call for a SUBSET of prompts: the inverse
+    of :func:`split_batch_call` element selection, so the fallback real call
+    keeps the call shape the model emitted (positional list vs. kwarg)."""
+    if kwarg_name is None:
+        return (prompts, *rest), dict(clean)
+    return rest, {**clean, kwarg_name: prompts}
+
+
 def spec_key(tool: ToolSpec, args: tuple, kwargs: dict) -> SpecKey:
     """Claim identity for one concrete call.
 

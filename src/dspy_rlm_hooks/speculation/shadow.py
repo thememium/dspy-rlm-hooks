@@ -48,6 +48,7 @@ from dspy_rlm_hooks.speculation.tool import (
     canonical_hash,
     contains_nonspec,
     spec_key,
+    split_batch_call,
 )
 
 STMT_WALL_BUDGET_S = 2.0  # runaway guard: max wall time per shadow statement
@@ -327,6 +328,8 @@ def _shadow_worker(conn, parent_conn, payload: dict) -> None:
             if msg is None:
                 break
             if isinstance(msg, tuple) and msg[0] == "reset":
+                if len(msg) > 1 and msg[1] is not None:
+                    seed = msg[1]  # reseed: subsequent fresh_ns() rebuilds from it
                 ns = fresh_ns()
                 chains = {}
                 chain_counter = _ContCounter()
@@ -605,6 +608,9 @@ class ShadowRunner:
         self._seed = classify_ns(real_locals)
         self._real_builtins = real_builtins
         self._stmt_budget = stmt_budget
+        # last per-turn seed pushed via begin_turn(ns) — skipping an identical
+        # reseed avoids re-serializing the whole namespace every turn
+        self._last_turn_seed = dict(real_locals)
         self._spawn()
 
     # -- process lifecycle ----------------------------------------------------
@@ -752,10 +758,16 @@ class ShadowRunner:
         state those statements produced."""
         self._conn.send(("peek", tail))
 
-    def begin_turn(self) -> None:
+    def begin_turn(self, ns: dict | None = None) -> None:
         """Start a turn on a persistent runner: reset worker state to the seed
         and clear this turn's parent-side accumulators. Pipe ordering
-        guarantees the reset lands before any segments fed after it."""
+        guarantees the reset lands before any segments fed after it.
+
+        ``ns`` (when given) RESEEDS the worker: the original seed captures only
+        ``input_args``, but cross-iteration state sync produces a fresh live
+        snapshot each turn; without reseeding, a persistent worker would reset
+        to stale values every turn. An identical namespace skips the reseed
+        (no re-serialization)."""
         self.ensure_alive()
         self.predicted = []
         self.executed = 0
@@ -771,8 +783,13 @@ class ShadowRunner:
             self._chain_ready = {}
             self._dep_values = {}
         self._turn_ended.clear()
+        reseed = None
+        if ns is not None and ns != self._last_turn_seed:
+            self._seed = classify_ns(ns)
+            self._last_turn_seed = dict(ns)
+            reseed = self._seed
         with self._send_lock:
-            self._conn.send(("reset",))
+            self._conn.send(("reset", reseed))
         self._turn_open = True
 
     def end_turn(self, timeout: float | None = None) -> bool:
@@ -893,12 +910,14 @@ class ShadowRunner:
         registry = self.registry
         if registry is None or not name.endswith("_batched"):
             return None
-        if not args or not isinstance(args[0], (list, tuple)):
+        split = split_batch_call(args, kwargs)
+        if split is None:
             return None
+        prompts, rest, clean, _kwname = split
         single = registry.get(name[: -len("_batched")])
         if single is None:
             return None
-        return ("__batch__", f"{name}|{spec_key(single, args, kwargs)[1]}")
+        return ("__batch__", f"{name}|{spec_key(single, (prompts,) + rest, clean)[1]}")
 
     def _decompose_batched(
         self, name: str, args: tuple, kwargs: dict, needed: int, adopt: bool
@@ -914,15 +933,18 @@ class ShadowRunner:
         batch_key = self._batch_key_for(name, args, kwargs)
         if batch_key is None:
             return None
+        split = split_batch_call(args, kwargs)
+        if split is None:
+            return None
+        prompts, rest, clean, _kwname = split
         single = self.registry.get(name[: -len("_batched")])
         assert single is not None
-        rest = tuple(args[1:])
         elem_keys: list = []
-        for elem in args[0]:
+        for elem in prompts:
             elem_args = (elem,) + rest
-            key = spec_key(single, elem_args, kwargs)
+            key = spec_key(single, elem_args, clean)
             elem_keys.append(key)
-            self.launcher.ensure_peeked(single, elem_args, kwargs, needed)
+            self.launcher.ensure_peeked(single, elem_args, clean, needed)
             if adopt:
                 self.store.adopt(key)
         with self._chain_lock:

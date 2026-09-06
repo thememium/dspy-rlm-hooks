@@ -284,6 +284,7 @@ class Launcher:
         def run() -> None:
             with self._queued_lock:
                 self._queued -= 1
+            spec.started_at = time.monotonic()  # excludes queue time
             if spec.state == "evicted":
                 spec.done.set()
                 return
@@ -316,9 +317,11 @@ class Launcher:
                 spec.state = "failed" if spec.state != "evicted" else "evicted"
             finally:
                 spec.resolved_at = time.monotonic()
-                if self.latency_aware and spec.dispatched_at is not None:
+                if self.latency_aware and spec.started_at is not None:
+                    # RUN time only: including queue time would inflate the
+                    # EWMA under load and make claim budgets hedge too early.
                     self.latency.record(
-                        tool.name, (spec.resolved_at - spec.dispatched_at) * 1000
+                        tool.name, (spec.resolved_at - spec.started_at) * 1000
                     )
             spec.done.set()
             if spec.state == "ready":
@@ -507,7 +510,7 @@ class SpecSession:
             runner = self._new_runner(host_locals, safe_builtins)
             self._warm_runner = runner
         else:
-            runner.begin_turn()
+            runner.begin_turn(host_locals)
         return runner
 
     def real_hooks(self) -> dict:

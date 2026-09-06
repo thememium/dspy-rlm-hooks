@@ -34,9 +34,11 @@ even when hooks later overwrote the wrapper.
 
 from __future__ import annotations
 
+import ast
 import atexit
 import builtins
 import inspect
+import json
 import weakref
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -46,8 +48,9 @@ from typing import TYPE_CHECKING, Any
 
 from dspy_rlm_hooks.patcher import _validate_rlm
 from dspy_rlm_hooks.speculation.config import SpeculationConfig
-from dspy_rlm_hooks.speculation.guards import is_claim_hook, raw_of, tag_claim_hook
+from dspy_rlm_hooks.speculation.guards import fully_raw, tag_claim_hook
 from dspy_rlm_hooks.speculation.shadow import shadow_builtins
+from dspy_rlm_hooks.speculation.streaming import _free_names
 from dspy_rlm_hooks.speculator import Speculator
 from dspy_rlm_hooks.utils import _assemble_execution_code
 
@@ -246,13 +249,11 @@ def _sync_registry_fns(spec: Speculator, repl: Any) -> None:
     for name in spec.registry.names():
         tool = spec.registry.get(name)
         if tool is not None and name in tools:
-            candidate = tools[name]
-            if is_claim_hook(candidate):
-                candidate = raw_of(candidate, fallback=None)
-                if candidate is None:
-                    candidate = spec._raw_fns.get(name)
-                if candidate is None:
-                    continue  # leave the existing (raw) fn untouched
+            candidate = fully_raw(tools[name], fallback=None)
+            if candidate is None:
+                candidate = spec._raw_fns.get(name)
+            if candidate is None:
+                continue  # leave the existing (raw) fn untouched
             spec._raw_fns[name] = candidate
             tool.fn = candidate
 
@@ -338,7 +339,7 @@ def _install_claim_hooks(
         if tool_spec is None or not tool_spec.speculatable:
             continue
         if name in _LLM_TOOLS:
-            raw = tools[name]
+            raw = fully_raw(tools[name], fallback=tools[name])
             tools[name] = tag_claim_hook(
                 _make_claim_hook(raw, claim_hook, name, max_llm_calls), raw_fn=raw
             )
@@ -347,7 +348,7 @@ def _install_claim_hooks(
             # default from DSPy's tool registration (it is not JSON-serializable).
             # dspy 3.3.x wraps tools with __signature__ set; 3.2.x passes raw
             # functions whose signature must be COMPUTED here.
-            raw = tools[name]
+            raw = fully_raw(tools[name], fallback=tools[name])
             sig = getattr(raw, "__signature__", None)
             if sig is None:
                 try:
@@ -359,6 +360,71 @@ def _install_claim_hooks(
             tools[name] = tag_claim_hook(claim_hook, raw_fn=raw)
     if hasattr(repl, "_tools_registered"):
         repl._tools_registered = False
+
+
+# -- cross-iteration state sync -----------------------------------------------
+
+# The persistent shadow resets to its ORIGINAL seed (input_args) each turn, so
+# calls reading variables created by EARLIER iterations would miss speculation.
+# A probe executed in the LIVE sandbox serializes safe top-level variables;
+# literal-repr values are re-hydrated into the shadow seed. Values that do not
+# round-trip are left out — the shadow treats the name as unknown and the real
+# path handles the call (no claim is ever corrupted by a stale value).
+
+_SNAPSHOT_MAX_VALUE_CHARS = 100_000
+
+_SNAPSHOT_PROBE = (
+    "import json as _spec_json\n"
+    "_spec_out = {}\n"
+    "for _spec_k, _spec_v in list(globals().items()):\n"
+    "    try:\n"
+    "        if _spec_k.startswith('_') or callable(_spec_v) or isinstance(_spec_v, type(_spec_json)):\n"
+    "            continue\n"
+    "        _spec_r = repr(_spec_v)\n"
+    "        if len(_spec_r) <= 100000:\n"
+    "            _spec_out[_spec_k] = _spec_r\n"
+    "    except Exception:\n"
+    "        pass\n"
+    "print(_spec_json.dumps(_spec_out))\n"
+)
+
+
+def _live_state_seed(
+    repl: Any, code: str, input_args: dict[str, Any], spec: Speculator
+) -> dict[str, Any]:
+    """Merge a live REPL snapshot into the shadow seed (input_args win).
+
+    Gated: the sandbox round trip runs only when the block reads names the seed
+    cannot provide (free names beyond ``input_args``, tool names, and builtins).
+    Non-literal or oversized values are skipped — the shadow treats the name as
+    unknown and the real path handles the call.
+    """
+    seed = dict(input_args)
+    try:
+        free = _free_names(ast.parse(code))
+    except (SyntaxError, ValueError):
+        return seed
+    tool_names = set(spec.registry.names()) if spec.registry else set()
+    if not (free - seed.keys() - tool_names - set(dir(builtins))):
+        return seed
+    try:
+        out = repl.execute(_SNAPSHOT_PROBE)
+        line = out.strip().splitlines()[-1] if out and out.strip() else ""
+        snap = json.loads(line)
+    except Exception:
+        return seed
+    if not isinstance(snap, dict):
+        return seed
+    for k, r in snap.items():
+        if k in seed or k in tool_names:
+            continue
+        if not isinstance(r, str) or len(r) > _SNAPSHOT_MAX_VALUE_CHARS:
+            continue
+        try:
+            seed[k] = ast.literal_eval(r)
+        except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+            continue
+    return seed
 
 
 def _maybe_begin_streaming_turn(
@@ -551,7 +617,8 @@ def _speculation_execute_code(
             t = None
             try:
                 t = spec.session.begin_stream_turn(
-                    dict(input_args), shadow_builtins(dict(builtins.__dict__))
+                    _live_state_seed(repl, code, input_args, spec),
+                    shadow_builtins(dict(builtins.__dict__)),
                 )
                 # CRITICAL: StreamSegmenter only emits inside ```repl fences.
                 t.feed(f"```repl\n{assembled}\n```\n")
@@ -564,6 +631,21 @@ def _speculation_execute_code(
                     except Exception:
                         pass
     if turn is not None:
+        # Cross-iteration sync: the turn was seeded with input_args before
+        # generation; variables created by EARLIER iterations are unknown to
+        # the persistent worker. Re-hydrate the live snapshot as assignments
+        # BEFORE the code so in-flight speculation sees current values.
+        try:
+            snap = _live_state_seed(repl, code, input_args, spec)
+            assigns = "".join(
+                f"{name} = {value!r}\n"
+                for name, value in snap.items()
+                if name not in input_args
+            )
+            if assigns:
+                turn.feed(f"```repl\n{assigns}\n```\n")
+        except Exception:
+            pass  # snapshot errors are SAFE: real execution is unaffected
         # Streaming turn is active (begun during generate_action). If it
         # produced no code deltas (cache hit, stream failure, or unfenced
         # output), top up with the full assembled block so the turn still

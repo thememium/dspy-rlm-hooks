@@ -455,7 +455,12 @@ def safe_eval(node: ast.expr, ns: dict[str, Any], depth: int = 0) -> Any:
             parts: list[str] = []
             for v in node.values:
                 if isinstance(v, ast.FormattedValue):
-                    parts.append(str(ev(v.value)))
+                    value = ev(v.value)
+                    converters = {ord("s"): str, ord("r"): repr, ord("a"): ascii}
+                    if v.conversion != -1:
+                        value = converters[v.conversion](value)
+                    spec = ev(v.format_spec) if v.format_spec is not None else ""
+                    parts.append(format(value, spec))
                 elif isinstance(v, ast.Constant):
                     parts.append(str(v.value))
                 else:
@@ -773,7 +778,7 @@ def _assigned_names_set(body: list, up_to: ast.stmt | None = None) -> set[str]:
     return out
 
 
-def _free_names(node: ast.expr) -> set[str]:
+def _free_names(node: ast.AST) -> set[str]:
     return {
         n.id
         for n in ast.walk(node)
@@ -955,7 +960,27 @@ def _unroll_for(
         except Unresolvable:
             return [], []
         item_assigned = set(body_assigned)
+        known_locals = set(loop_vars)
         for stmt in plannable:
+            target = _single_assign_target(stmt)
+            if target is not None and isinstance(stmt, ast.Assign):
+                reads = _free_names(stmt.value)
+                if not (reads & (item_assigned - known_locals)):
+                    try:
+                        value = safe_eval(stmt.value, item_env)
+                    except (
+                        Unresolvable,
+                        TypeError,
+                        ValueError,
+                        LookupError,
+                        ArithmeticError,
+                    ):
+                        pass
+                    else:
+                        item_env[target] = value
+                        known_locals.add(target)
+                        item_assigned.add(target)
+                        continue
             for call in _hooked_calls(stmt, spec_names):
                 resolved = _resolve_call_or_chain(
                     call,
@@ -964,8 +989,8 @@ def _unroll_for(
                     raw_tail,
                     productions,
                     counter,
-                    extra_env={n: item_env[n] for n in loop_vars},
-                    loop_var_ok=loop_vars,
+                    extra_env={n: item_env[n] for n in known_locals},
+                    loop_var_ok=known_locals,
                     dep_capable=dep_capable,
                 )
                 # unresolvable calls (e.g. stage-2 of a per-item chain whose
@@ -983,7 +1008,9 @@ def _unroll_for(
                         productions[target] = ("key", resolved.key)
                     else:
                         productions[target] = ("cont", resolved.cont_id)
-            item_assigned |= _assigned_names(stmt)
+            changed = _assigned_names(stmt)
+            known_locals -= changed
+            item_assigned |= changed
     return plans, chain_plans
 
 
