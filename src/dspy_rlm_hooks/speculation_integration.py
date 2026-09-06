@@ -34,23 +34,37 @@ even when hooks later overwrote the wrapper.
 
 from __future__ import annotations
 
+import ast
 import atexit
 import builtins
 import inspect
 import weakref
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from types import MethodType
-from typing import Any
-
-from dspy.primitives.prediction import Prediction
+from typing import TYPE_CHECKING, Any
 
 from dspy_rlm_hooks.patcher import _validate_rlm
 from dspy_rlm_hooks.speculation.config import SpeculationConfig
-from dspy_rlm_hooks.speculation.guards import is_claim_hook, raw_of, tag_claim_hook
+from dspy_rlm_hooks.speculation.guards import fully_raw, tag_claim_hook
 from dspy_rlm_hooks.speculation.shadow import shadow_builtins
+from dspy_rlm_hooks.speculation.streaming import _free_names
 from dspy_rlm_hooks.speculator import Speculator
 from dspy_rlm_hooks.utils import _assemble_execution_code
+
+if TYPE_CHECKING:
+    # Kept off the module import path: importing this module must stay cheap
+    # because the speculation engine's shadow subprocess imports this package.
+    pass
+
+
+def _prediction_type() -> type:
+    """Runtime ``Prediction`` class, imported on first use."""
+    from dspy.primitives.prediction import Prediction
+
+    return Prediction
+
 
 # The built-in LLM tools whose closure-local counter we re-implement on claim.
 _LLM_TOOLS = ("llm_query", "llm_query_batched")
@@ -95,16 +109,77 @@ def _placeholder(*args: Any, **kwargs: Any) -> Any:
     )
 
 
+def _extract_sub_lm_text(response: Any) -> str:
+    """Extract the text from a sub-LM response — best-effort, mirroring dspy's
+    ``_query_lm`` shapes with a ``str`` fallback.
+
+    Speculative results are best-effort predictions: the strict response
+    contract stays enforced by the REAL call (a claimed miss re-runs it), so a
+    lenient fallback here never changes what the model finally receives when
+    the sub-LM is genuinely misconfigured."""
+    import dspy  # lazy: this module must stay importable without dspy
+
+    lm_response = getattr(dspy, "LMResponse", None)
+    if lm_response is not None and isinstance(response, lm_response):
+        text = response.text
+    elif isinstance(response, list) and response:
+        first = response[0]
+        text = first.get("text") if isinstance(first, dict) else first
+    else:
+        text = str(response)
+    return text if isinstance(text, str) else str(text)
+
+
+def _make_llm_spec_fns(rlm: Any) -> dict[str, Callable]:
+    """Counter-free speculative executors for the built-in LLM tools.
+
+    dspy's raw ``llm_query`` closure increments the ``max_llm_calls`` budget on
+    EVERY execution — including speculative ones — so wasted bets (evicted
+    peeks, re-plan churn) consumed the model's logical budget. Speculative
+    executions call the sub-LM directly instead: they do not consume the
+    logical budget (enforced by the claim-hook counter on model-requested
+    calls only) and stay bounded by the speculation budget
+    (``max_dispatches_per_turn``) plus per-prompt dedup.
+    """
+
+    def _query(prompt: str) -> str:
+        import dspy  # lazy: this module must stay importable without dspy
+
+        lm = getattr(rlm, "sub_lm", None) or dspy.settings.lm
+        if lm is None:
+            # dspy 3.2.x exposes this as RuntimeError, 3.3.x as LMNotConfiguredError
+            err = getattr(dspy, "LMNotConfiguredError", RuntimeError)
+            raise err(
+                "No LM configured. Use dspy.configure(lm=...) or pass sub_lm to RLM."
+            )
+        return _extract_sub_lm_text(lm(prompt))
+
+    def llm_query(prompt: str) -> str:
+        if not prompt:
+            raise ValueError("prompt cannot be empty")
+        return _query(prompt)
+
+    def llm_query_batched(prompts: list) -> list:
+        if not prompts:
+            return []
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            return list(executor.map(_query, prompts))
+
+    return {"llm_query": llm_query, "llm_query_batched": llm_query_batched}
+
+
 def _register_classifications(
-    spec: Speculator, config: SpeculationConfig, tools: Any
+    spec: Speculator, config: SpeculationConfig, tools: Any, rlm: Any = None
 ) -> None:
     """Register tool CLASSIFICATIONS once per RLM.
 
     The built-in ``llm_query``/``llm_query_batched`` are registered as
-    speculatable+pure (per config flags). User tools are registered with their
-    classification (``speculate_user_tools`` master switch). The actual
+    speculatable+pure (per config flags) with COUNTER-FREE speculative
+    executors (see :func:`_make_llm_spec_fns`). User tools are registered with
+    their classification (``speculate_user_tools`` master switch). The actual
     functions are synced per-execution from the fresh ``repl.tools``.
     """
+    spec_fns = _make_llm_spec_fns(rlm) if rlm is not None else {}
     if config.speculate_llm_query:
         spec.registry.register(
             "llm_query",
@@ -113,6 +188,7 @@ def _register_classifications(
             pure=True,
             deterministic=False,
             latency_hint_ms=1000.0,
+            spec_fn=spec_fns.get("llm_query"),
         )
     if config.speculate_llm_query_batched:
         spec.registry.register(
@@ -122,17 +198,25 @@ def _register_classifications(
             pure=True,
             deterministic=False,
             latency_hint_ms=1000.0,
+            spec_fn=spec_fns.get("llm_query_batched"),
         )
     if tools:
         for name, tool in tools.items():
-            fn = getattr(tool, "func", tool)
+            # Accepted forms: a plain callable, a dspy ``Tool`` (uses ``.func``),
+            # or a ``(callable, policy_kwargs)`` pair for per-tool overrides.
+            policy_kwargs: dict[str, Any] = {}
+            if isinstance(tool, tuple) and len(tool) == 2 and callable(tool[0]):
+                fn, policy_kwargs = tool
+                policy_kwargs = dict(policy_kwargs or {})
+            else:
+                fn = getattr(tool, "func", tool)
             spec.registry.register(
                 name,
                 fn,
                 speculatable=config.speculate_user_tools,
                 pure=config.speculate_user_tools,
-                deterministic=False,
-                latency_hint_ms=1000.0,
+                deterministic=bool(policy_kwargs.get("deterministic", False)),
+                latency_hint_ms=float(policy_kwargs.get("latency_hint_ms", 1000.0)),
             )
 
 
@@ -164,13 +248,11 @@ def _sync_registry_fns(spec: Speculator, repl: Any) -> None:
     for name in spec.registry.names():
         tool = spec.registry.get(name)
         if tool is not None and name in tools:
-            candidate = tools[name]
-            if is_claim_hook(candidate):
-                candidate = raw_of(candidate, fallback=None)
-                if candidate is None:
-                    candidate = spec._raw_fns.get(name)
-                if candidate is None:
-                    continue  # leave the existing (raw) fn untouched
+            candidate = fully_raw(tools[name], fallback=None)
+            if candidate is None:
+                candidate = spec._raw_fns.get(name)
+            if candidate is None:
+                continue  # leave the existing (raw) fn untouched
             spec._raw_fns[name] = candidate
             tool.fn = candidate
 
@@ -256,20 +338,204 @@ def _install_claim_hooks(
         if tool_spec is None or not tool_spec.speculatable:
             continue
         if name in _LLM_TOOLS:
-            raw = tools[name]
+            raw = fully_raw(tools[name], fallback=tools[name])
             tools[name] = tag_claim_hook(
                 _make_claim_hook(raw, claim_hook, name, max_llm_calls), raw_fn=raw
             )
         else:
             # Mirror the LLM branch: hide the raw hook's internal ``_tool=ToolSpec``
             # default from DSPy's tool registration (it is not JSON-serializable).
-            raw = tools[name]
+            # dspy 3.3.x wraps tools with __signature__ set; 3.2.x passes raw
+            # functions whose signature must be COMPUTED here.
+            raw = fully_raw(tools[name], fallback=tools[name])
             sig = getattr(raw, "__signature__", None)
+            if sig is None:
+                try:
+                    sig = inspect.signature(raw)
+                except (TypeError, ValueError):
+                    sig = None
             if sig is not None:
                 setattr(claim_hook, "__signature__", sig)
             tools[name] = tag_claim_hook(claim_hook, raw_fn=raw)
     if hasattr(repl, "_tools_registered"):
-        repl._tools_registered = False
+        # Only force tool re-registration when tool signatures actually changed.
+        # _register_tools sends a JSON-RPC message to the sandbox (~0.6ms per
+        # call with tools). Since claim hooks preserve the raw tool's signature,
+        # re-registration is a no-op when the tool set is stable across iterations.
+        try:
+            sig_hash = hash(
+                tuple(
+                    (name, str(getattr(tools[name], "__signature__", None)))
+                    for name in sorted(tools)
+                )
+            )
+        except Exception:
+            sig_hash = None
+        if sig_hash is not None and sig_hash != getattr(
+            rlm, "_spec_last_tool_sig_hash", None
+        ):
+            rlm._spec_last_tool_sig_hash = sig_hash
+            repl._tools_registered = False
+
+
+# -- cross-iteration state sync -----------------------------------------------
+
+# The persistent shadow resets to its ORIGINAL seed (input_args) each turn, so
+# calls reading variables created by EARLIER iterations would miss speculation.
+# A probe executed in the LIVE sandbox serializes safe top-level variables;
+# literal-repr values are re-hydrated into the shadow seed. Values that do not
+# round-trip are left out — the shadow treats the name as unknown and the real
+# path handles the call (no claim is ever corrupted by a stale value).
+
+_SNAPSHOT_MAX_VALUE_CHARS = 100_000
+
+_SNAPSHOT_PROBE = (
+    "_spec_out = {}\n"
+    "for _spec_k in _spec_requested:\n"
+    "    try:\n"
+    "        _spec_v = globals().get(_spec_k)\n"
+    "        if _spec_v is not None and not callable(_spec_v) and not isinstance(_spec_v, type):\n"
+    "            _spec_r = repr(_spec_v)\n"
+    "            if len(_spec_r) <= 100000:\n"
+    "                _spec_out[_spec_k] = _spec_r\n"
+    "    except Exception:\n"
+    "        pass\n"
+    "print(repr(_spec_out))\n"
+)
+
+
+def _snapshot_reads(tree: ast.Module) -> set[str]:
+    required: set[str] = set()
+    bound: set[str] = set()
+    imports: set[str] = set()  # survive bound.clear(); always available at module level
+    for statement in tree.body:
+        reads = _free_names(statement)
+        for node in ast.walk(statement):
+            if isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+                reads.add(node.target.id)
+        required.update(reads - bound - imports)
+        if isinstance(statement, ast.Assign):
+            bound.update(
+                target.id
+                for target in statement.targets
+                if isinstance(target, ast.Name)
+            )
+        elif isinstance(statement, (ast.Import, ast.ImportFrom)):
+            # import X / from X import Y bind names just like assignments.
+            # Without this, `import time` followed by `time.perf_counter`
+            # would treat `time` as a free name needing snapshot, triggering
+            # an expensive REPL probe that the snapshot filter would discard
+            # anyway (modules are filtered by isinstance check in the probe).
+            for alias in statement.names:
+                imports.add(alias.asname or alias.name)
+        else:
+            bound.clear()
+    return required
+
+
+def _pure_assigned_names(tree: ast.Module) -> set[str]:
+    """Names that are assigned WITHOUT being read in the same assignment's value.
+
+    For ``now = time.perf_counter``, the target ``now`` does not appear in the
+    value — it's a pure overwrite and the REPL snapshot is useless (the code's
+    own assignment will replace whatever the snapshot provides).
+
+    For ``value = value + 'new'``, the target ``value`` IS read in the value —
+    the snapshot is needed because the code reads the old value.
+
+    Only top-level (non-nested) assignments are considered, matching the
+    scoping rules of ``_snapshot_reads``.
+    """
+    out: set[str] = set()
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign):
+            value_reads = {
+                n.id for n in ast.walk(stmt.value) if isinstance(n, ast.Name)
+            }
+            for target in stmt.targets:
+                if isinstance(target, ast.Name) and target.id not in value_reads:
+                    out.add(target.id)
+        elif isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            for alias in stmt.names:
+                out.add(alias.asname or alias.name)
+    return out
+
+
+def _live_state_seed(
+    repl: Any, code: str, input_args: dict[str, Any], spec: Speculator
+) -> dict[str, Any]:
+    """Merge a live REPL snapshot into the shadow seed (input_args win).
+
+    Gated: the sandbox round trip runs only when the block reads names the seed
+    cannot provide (free names beyond ``input_args``, tool names, and builtins).
+    Non-literal or oversized values are skipped — the shadow treats the name as
+    unknown and the real path handles the call.
+    """
+    seed = dict(input_args)
+    try:
+        tree = ast.parse(code)
+        free = _snapshot_reads(tree)
+    except (SyntaxError, ValueError):
+        return seed
+    tool_names = set(spec.registry.names()) if spec.registry else set()
+    requested = free - seed.keys() - tool_names - set(dir(builtins))
+    if not requested:
+        return seed
+    # Single-pass AST analysis: collect pure assignments, loop targets,
+    # all stored names, and all read names in one walk.
+    pure_assigned = _pure_assigned_names(tree)
+    requested -= pure_assigned
+    if not requested:
+        return seed
+    loop_targets: set[str] = set()
+    all_stored: set[str] = set()
+    all_reads: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.For):
+            iter_node = node.iter
+            non_empty = (
+                isinstance(iter_node, (ast.List, ast.Tuple)) and len(iter_node.elts) > 0
+            ) or (
+                isinstance(iter_node, ast.Constant)
+                and isinstance(iter_node.value, (str, bytes, list, tuple))
+                and len(iter_node.value) > 0
+            )
+            if non_empty:
+                for n in ast.walk(node.target):
+                    if isinstance(n, ast.Name):
+                        loop_targets.add(n.id)
+        if isinstance(node, ast.Name):
+            if isinstance(node.ctx, (ast.Store, ast.Del)):
+                all_stored.add(node.id)
+            elif isinstance(node.ctx, ast.Load):
+                all_reads.add(node.id)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            all_reads.add(node.target.id)
+    stored_not_read = (all_stored - all_reads) | loop_targets
+    remaining = requested - stored_not_read
+    if not remaining:
+        return seed
+    requested = remaining
+    try:
+        out = repl.execute(
+            f"_spec_requested = {sorted(requested)!r}\n" + _SNAPSHOT_PROBE
+        )
+        line = out.strip().splitlines()[-1] if out and out.strip() else ""
+        snap = ast.literal_eval(line)
+    except Exception:
+        return seed
+    if not isinstance(snap, dict):
+        return seed
+    for k, r in snap.items():
+        if k not in requested:
+            continue
+        if not isinstance(r, str) or len(r) > _SNAPSHOT_MAX_VALUE_CHARS:
+            continue
+        try:
+            seed[k] = ast.literal_eval(r)
+        except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+            continue
+    return seed
 
 
 def _maybe_begin_streaming_turn(
@@ -292,6 +558,13 @@ def _maybe_begin_streaming_turn(
         return
     try:
         _sync_registry_fns(spec, repl)
+        rlm._spec_synced_this_iter = True
+        # Reset per-forward() exec counter when a fresh REPL is detected.
+        # The REPL is created anew each forward() call, so a different object
+        # means we're starting a new run.
+        if getattr(rlm, "_spec_last_repl", None) is not repl:
+            rlm._spec_exec_count = 0
+            rlm._spec_last_repl = repl
         turn = spec.session.begin_stream_turn(
             dict(input_args), shadow_builtins(dict(builtins.__dict__))
         )
@@ -375,7 +648,7 @@ class _StreamingGenerateAction:
         sync, _ = streams
         try:
             for item in sync(*args, **kwargs):
-                if isinstance(item, Prediction):
+                if isinstance(item, _prediction_type()):
                     return item
                 self._feed_item(item)
         except Exception:
@@ -393,7 +666,7 @@ class _StreamingGenerateAction:
         _, astream = streams
         try:
             async for item in astream(*args, **kwargs):
-                if isinstance(item, Prediction):
+                if isinstance(item, _prediction_type()):
                     return item
                 self._feed_item(item)
         except Exception:
@@ -451,7 +724,23 @@ def _speculation_execute_code(
     # The FINAL code the real interpreter runs (persistent prelude + injected
     # vars), NOT the raw un-assembled code.
     assembled = _assemble_execution_code(repl, code)
-    _sync_registry_fns(spec, repl)
+    # Skip redundant sync when _maybe_begin_streaming_turn already synced this iteration.
+    # Use explicit `in __dict__` check: getattr on MagicMock would auto-create the attr.
+    if "_spec_synced_this_iter" not in self.__dict__ or not self._spec_synced_this_iter:
+        _sync_registry_fns(spec, repl)
+    self._spec_synced_this_iter = False
+
+    # Reset per-forward() exec counter when a fresh REPL is detected
+    # (non-streaming path: _maybe_begin_streaming_turn handles the streaming path).
+    if getattr(self, "_spec_last_repl", None) is not repl:
+        self._spec_exec_count = 0
+        self._spec_last_repl = repl
+
+    # First-iteration fast path: the REPL starts empty (no prior iterations),
+    # so the live-state snapshot is guaranteed to return nothing.  Skip the
+    # expensive repl.execute() round-trip (~775ms on Deno subprocess).
+    first_exec = not getattr(self, "_spec_exec_count", 0)
+    self._spec_exec_count = getattr(self, "_spec_exec_count", 0) + 1
 
     # A streaming turn is active when it was begun by the patched iteration
     # method (streaming mode). Otherwise fall back to the Lazy/JIT one-shot pass.
@@ -461,8 +750,14 @@ def _speculation_execute_code(
         if _has_speculatable(spec):
             t = None
             try:
+                seed = (
+                    dict(input_args)
+                    if first_exec
+                    else _live_state_seed(repl, code, input_args, spec)
+                )
                 t = spec.session.begin_stream_turn(
-                    dict(input_args), shadow_builtins(dict(builtins.__dict__))
+                    seed,
+                    shadow_builtins(dict(builtins.__dict__)),
                 )
                 # CRITICAL: StreamSegmenter only emits inside ```repl fences.
                 t.feed(f"```repl\n{assembled}\n```\n")
@@ -474,20 +769,30 @@ def _speculation_execute_code(
                         t.end(timeout=config.timeout_s)
                     except Exception:
                         pass
-    else:
+    if turn is not None:
         # Streaming turn is active (begun during generate_action). If it
         # produced no code deltas (cache hit, stream failure, or unfenced
-        # output), top up with the full assembled block so the turn still
-        # speculates over what the real interpreter will run.
+        # output), top up with the live-state snapshot and the full assembled
+        # block so the turn still speculates over what the real interpreter
+        # will run.
         if not getattr(self, "_streaming_fed_any", False):
             try:
+                if not first_exec:
+                    snap = _live_state_seed(repl, code, input_args, spec)
+                    assigns = "".join(
+                        f"{name} = {value!r}\n"
+                        for name, value in snap.items()
+                        if name not in input_args
+                    )
+                    if assigns:
+                        turn.feed(f"```repl\n{assigns}\n```\n")
                 turn.feed(f"```repl\n{assembled}\n```\n")
             except Exception:
                 pass
-        # End the turn BEFORE real execution so the shadow has drained and
-        # queued every dispatch (the reader thread may still be processing
-        # tail messages when the streamed feed returns). Real exec then claims
-        # these queued specs; in-flight ones are awaited by the claim hooks.
+        # Drain BEFORE real execution so the shadow has queued every dispatch
+        # and the no-recall invariant holds (a claim must never re-dispatch a
+        # call the shadow is about to dispatch). With the persistent warm
+        # worker this drain is a cheap pipe round-trip, not a process teardown.
         try:
             turn.end(timeout=config.timeout_s)
         except Exception:
@@ -521,6 +826,8 @@ def enable_rlm_speculation(
     speculate_user_tools: bool = False,
     timeout_s: float = 5.0,
     streaming: bool = True,
+    persistent_shadow: bool = True,
+    latency_aware: bool = True,
 ) -> None:
     """Enable speculative execution on a :class:`~dspy.RLM` instance.
 
@@ -553,6 +860,11 @@ def enable_rlm_speculation(
         speculate_user_tools: Master switch for user-registered tools.
         timeout_s: How long to wait on the shadow pre-pass before falling back
             to real execution.
+        persistent_shadow: Keep one shadow subprocess warm across iterations
+            (default True) instead of spawning per iteration.
+        latency_aware: Track per-tool latency and let claims on in-flight
+            speculations hedge (run the real tool) when waiting would cost
+            more than duplicating the call (default True).
         streaming: Stream the ``code`` output during generation (default True).
             When False, use the Lazy/JIT one-shot shadow over the assembled code.
     """
@@ -567,12 +879,16 @@ def enable_rlm_speculation(
         speculate_user_tools=speculate_user_tools,
         timeout_s=timeout_s,
         streaming=streaming,
+        persistent_shadow=persistent_shadow,
+        latency_aware=latency_aware,
     )
     spec = Speculator(
         max_inflight=max_inflight,
         max_dispatches_per_turn=max_dispatches_per_turn,
+        persistent_shadow=persistent_shadow,
+        latency_aware=latency_aware,
     )
-    _register_classifications(spec, config, tools)
+    _register_classifications(spec, config, tools, rlm=rlm)
     _register_speculator(spec)
 
     original = rlm._execute_code

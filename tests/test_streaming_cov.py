@@ -4,8 +4,8 @@ These target the remaining branches in ``streaming.py`` that are reachable
 through mocking, direct private-helper calls, or hand-built segmenter state:
 
 - ``plan_peeks``'s ``except SyntaxError`` fallback
-- ``_resolve_call``'s non-``Name`` func guard
-- ``_resolve_call``'s keyword-arg-reads-earlier-assigned-name rail
+- ``_resolve_call_or_chain``'s non-``Name`` func guard
+- ``_resolve_call_or_chain``'s keyword-arg-reads-earlier-assigned-name rail
 - the simple-statement break in ``_next_closed``, exercised on a buffer where
   a closed simple statement is followed by a still-buffered line
 
@@ -22,7 +22,8 @@ from unittest.mock import patch
 from dspy_rlm_hooks.speculation.streaming import (
     StreamSegmenter,
     _BlockState,
-    _resolve_call,
+    _ContCounter,
+    _resolve_call_or_chain,
     plan_peeks,
 )
 
@@ -41,7 +42,7 @@ def test_plan_peeks_handles_unparseable_repaired_tail():
 
 
 def test_resolve_call_rejects_non_name_func():
-    """``_resolve_call`` is only reached with ``Name`` funcs via
+    """``_resolve_call_or_chain`` is only reached with ``Name`` funcs via
     ``_hooked_calls``, but the defensive guard is exercised directly."""
     call = ast.Call(
         func=ast.Attribute(
@@ -52,7 +53,10 @@ def test_resolve_call_rejects_non_name_func():
         args=[],
         keywords=[],
     )
-    assert _resolve_call(call, {}, set(), "obj.method()") is None
+    assert (
+        _resolve_call_or_chain(call, {}, set(), "obj.method()", {}, _ContCounter())
+        is None
+    )
 
 
 def test_plan_peeks_skips_kwarg_reading_earlier_assigned_name():

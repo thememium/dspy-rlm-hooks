@@ -22,7 +22,9 @@ batched path only for the elements that missed.
 from __future__ import annotations
 
 import asyncio
+import functools
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from dspy_rlm_hooks.speculation.guards import current_spec, raw_tool_fn, tag_claim_hook
@@ -32,7 +34,9 @@ from dspy_rlm_hooks.speculation.tool import (
     SpecValue,
     ToolSpec,
     contains_nonspec,
+    rejoin_batch_call,
     spec_key,
+    split_batch_call,
 )
 
 
@@ -64,6 +68,238 @@ def deep_force(obj: Any, depth: int = 3) -> Any:
     if isinstance(obj, dict):
         return {k: deep_force(v, depth - 1) for k, v in obj.items()}
     return obj
+
+
+_MAX_CLAIM_WAIT_S = 30.0  # hard ceiling on claim waits without a launcher
+
+
+def _claim_wait_budget(spec: Speculation, tool: ToolSpec, launcher: Any) -> float:
+    """Seconds worth waiting for an in-flight speculation before hedging.
+
+    Uses the launcher's per-tool latency EWMA (falling back to the tool's
+    ``latency_hint_ms``): waiting is capped at ~2x the estimated remaining
+    time and never past the launcher's ceiling; a queued-not-started
+    speculation whose queue will drain slower than duplicating the call
+    returns 0 (hedge immediately).
+    """
+    if launcher is None or not getattr(launcher, "latency_aware", False):
+        return _MAX_CLAIM_WAIT_S
+    ceiling = float(getattr(launcher, "max_claim_wait_s", _MAX_CLAIM_WAIT_S))
+    ewma_s = launcher.ewma_ms(tool.name, tool.latency_hint_ms) / 1000.0
+    # Use the hint as a floor for the duplicate cost — the EWMA can be
+    # dominated by a fast first call, making the cap too small for slower
+    # subsequent calls.
+    hint_s = tool.latency_hint_ms / 1000.0
+    duplicate_cost = max(ewma_s, hint_s, 0.05)
+    if spec.state == "running":
+        # elapsed measured from WORKER START: dispatched_at includes queue
+        # time, which would understate the remaining run budget.
+        elapsed = time.monotonic() - (
+            spec.started_at or spec.dispatched_at or time.monotonic()
+        )
+        remaining = max(ewma_s - elapsed, 0.0)
+        return min(max(remaining * 1.5, 0.25), duplicate_cost * 2.0, ceiling)
+    # pending: queued behind other dispatches; the pool runs `workers`
+    # speculations in parallel, so depth N drains in ceil(N / workers) waves,
+    # minus the time this spec has already spent queued.
+    workers = max(1, getattr(getattr(launcher, "budget", None), "max_inflight", 1) or 1)
+    est_s = -(-(launcher.queued_depth() + 1) // workers) * ewma_s
+    est_s -= time.monotonic() - (spec.dispatched_at or time.monotonic())
+    if est_s > duplicate_cost * 1.5:
+        return 0.0
+    return min(max(est_s * 1.5, 0.25), duplicate_cost * 2.0, ceiling)
+
+
+def _hedge(
+    spec: Speculation,
+    tool: ToolSpec,
+    args: tuple,
+    kwargs: dict,
+    bus: Any,
+    key: Any,
+    t0: float,
+) -> Any:
+    """Abandon a slow speculation and run the real tool.
+
+    Only pure tools are speculated, so duplicate execution is safe by
+    definition; the abandoned future is marked evicted and cancelled.
+    """
+    bus.emit(
+        "claim_hedge",
+        key=key,
+        tool=tool.name,
+        waited_ms=(time.perf_counter() - t0) * 1000,
+    )
+    spec.state = "evicted"
+    if spec.cancel is not None:
+        try:
+            spec.cancel()
+        except Exception:
+            pass
+    bus.emit("claim_miss", key=key, tool=tool.name)
+    return tool.fn(*args, **kwargs)
+
+
+def _evict(spec: Any) -> None:
+    """Abandon one speculation: evict and cancel its worker, if any."""
+    spec.state = "evicted"
+    if spec.cancel is not None:
+        try:
+            spec.cancel()
+        except Exception:
+            pass
+
+
+def _race_hedge(
+    spec: Speculation,
+    tool: ToolSpec,
+    args: tuple,
+    kwargs: dict,
+    bus: Any,
+    key: Any,
+    t0: float,
+    launcher: Any = None,
+) -> Any:
+    """The wait budget expired on a RUNNING speculation. Do NOT abandon it:
+    dispatch one duplicate under the same pool's concurrency limit and take
+    whichever resolves first. A request that would have finished just after
+    the budget costs only the overlap, not a full second model call.
+
+    Racing is impossible without a launcher (or when the budget denies the
+    duplicate) — fall back to the classic hedge and run the real tool.
+    """
+    bus.emit(
+        "claim_hedge",
+        key=key,
+        tool=tool.name,
+        waited_ms=(time.perf_counter() - t0) * 1000,
+    )
+    dup: Speculation | None = None
+    if launcher is not None:
+        try:
+            dup = launcher.dispatch(tool, args, kwargs, "hedge")
+        except Exception:
+            dup = None
+    if dup is None or dup is spec:
+        _evict(spec)
+        bus.emit("claim_miss", key=key, tool=tool.name)
+        return tool.fn(*args, **kwargs)
+    deadline = time.monotonic() + _MAX_CLAIM_WAIT_S
+    while time.monotonic() < deadline:
+        # the original finishing late is a WIN: no duplicate execution wasted
+        if spec.done.is_set():
+            if spec.state != "evicted" and spec.error is None:
+                _evict(dup)
+                result = spec.result(0)
+                spec.state = "claimed"
+                bus.emit(
+                    "claim_done",
+                    key=key,
+                    seq=spec.seq,
+                    tool=tool.name,
+                    waited_ms=(time.perf_counter() - t0) * 1000,
+                )
+                return result
+            break  # original failed/evicted mid-race: fall through to dup
+        if dup.done.is_set():
+            if dup.error is None and dup.state != "evicted":
+                _evict(spec)
+                result = dup.result(0)
+                dup.state = "claimed"
+                bus.emit(
+                    "claim_done",
+                    key=key,
+                    seq=dup.seq,
+                    tool=tool.name,
+                    waited_ms=(time.perf_counter() - t0) * 1000,
+                )
+                return result
+            break  # duplicate failed: keep waiting on the original below
+        time.sleep(0.002)
+    if spec.done.is_set() and spec.state != "evicted" and spec.error is None:
+        _evict(dup)
+        result = spec.result(0)
+        spec.state = "claimed"
+        return result
+    if dup.done.is_set() and dup.error is None and dup.state != "evicted":
+        _evict(spec)
+        result = dup.result(0)
+        dup.state = "claimed"
+        return result
+    # neither resolved within the ceiling: run the real tool
+    _evict(spec)
+    _evict(dup)
+    bus.emit("claim_miss", key=key, tool=tool.name)
+    return tool.fn(*args, **kwargs)
+
+
+def _claim_or_run(
+    tool: ToolSpec,
+    args: tuple,
+    kwargs: dict,
+    store: SpecStore,
+    bus: Any,
+    launcher: Any = None,
+) -> Any:
+    """Claim a speculation for one call; on hit wait for and return its result,
+    on miss run the real tool (the baseline path).
+
+    Latency-aware: a claim on an in-flight speculation waits at most its
+    estimated remaining time (vs. the cost of duplicating the call), then
+    hedges.
+    """
+    key = spec_key(tool, args, kwargs)
+    t0 = time.perf_counter()
+    spec = store.claim(key, reuse=tool.deterministic)
+    if spec is not None:
+        if spec is current_spec():
+            # self-claim guard: this hook is being run BY the very worker that
+            # must resolve `spec`; waiting on it would block the pool (and
+            # interpreter shutdown) for the full timeout. Run the raw tool.
+            return raw_tool_fn(tool)(*args, **kwargs)
+        if not spec.done.is_set():
+            budget = _claim_wait_budget(spec, tool, launcher)
+            if budget <= 0:
+                return _hedge(spec, tool, args, kwargs, bus, key, t0)
+            try:
+                result = spec.result(timeout=budget)
+            except TimeoutError:
+                return _race_hedge(spec, tool, args, kwargs, bus, key, t0, launcher)
+            spec.state = "claimed"
+            bus.emit(
+                "claim_hit",
+                key=key,
+                seq=spec.seq,
+                tool=tool.name,
+                already_ready=False,
+            )
+            bus.emit(
+                "claim_done",
+                key=key,
+                seq=spec.seq,
+                tool=tool.name,
+                waited_ms=(time.perf_counter() - t0) * 1000,
+            )
+            return result
+        bus.emit(
+            "claim_hit",
+            key=key,
+            seq=spec.seq,
+            tool=tool.name,
+            already_ready=True,
+        )
+        result = spec.result(0)
+        spec.state = "claimed"
+        bus.emit(
+            "claim_done",
+            key=key,
+            seq=spec.seq,
+            tool=tool.name,
+            waited_ms=(time.perf_counter() - t0) * 1000,
+        )
+        return result
+    bus.emit("claim_miss", key=key, tool=tool.name)
+    return tool.fn(*args, **kwargs)
 
 
 def _is_batched(tool: ToolSpec) -> bool:
@@ -111,23 +347,24 @@ def make_real_hooks(reg, store: SpecStore, launcher, bus=None) -> dict[str, Any]
 
         if tool.is_async:
             hooks[name] = tag_claim_hook(
-                _async_real_hook(tool, reg, store, bus), raw_fn=tool.fn
+                _async_real_hook(tool, reg, store, bus, launcher), raw_fn=tool.fn
             )
             continue
 
+        @functools.wraps(tool.fn)
         def hook(*args: Any, _tool=tool, **kwargs: Any):
             if not _tool.speculatable:
                 return _tool.fn(*args, **kwargs)
-            if _is_batched(_tool) and args and isinstance(args[0], (list, tuple)):
+            split = split_batch_call(args, kwargs) if _is_batched(_tool) else None
+            if split is not None:
                 single = _single_of(_tool, reg)
-                prompts = list(args[0])
-                rest = tuple(args[1:])
+                prompts, rest, clean, kwname = split
                 out: list[Any] = [None] * len(prompts)
                 misses: list[int] = []
                 claimed: list[tuple[int, Speculation]] = []
                 cur = current_spec()
                 for i, p in enumerate(prompts):
-                    key = spec_key(single, (p,) + rest, kwargs)
+                    key = spec_key(single, (p,) + rest, clean)
                     spec = store.claim(key, reuse=single.deterministic)
                     if spec is None or spec is cur:
                         # self-claim guard: waiting on our own worker's done would deadlock the pool
@@ -143,71 +380,91 @@ def make_real_hooks(reg, store: SpecStore, launcher, bus=None) -> dict[str, Any]
                         )
                         claimed.append((i, spec))
                 if misses:
-                    batch_res = _tool.fn([prompts[i] for i in misses], *rest, **kwargs)
+                    rargs, rkwargs = rejoin_batch_call(
+                        [prompts[i] for i in misses], rest, clean, kwname
+                    )
+                    batch_res = _tool.fn(*rargs, **rkwargs)
                     for j, i in enumerate(misses):
                         out[i] = batch_res[j]
-                for i, spec in claimed:
-                    out[i] = spec.result(timeout=600)
-                    spec.state = "claimed"
+                waited: list[int] = []
+                if claimed:
+                    # collect all claim waits CONCURRENTLY: sequential waits
+                    # would compound each element's budget into the next one's
+                    # deadline, so N slow claims cost N budgets. Concurrent
+                    # collection costs max(budgets); output order is preserved
+                    # by indexing into `out` directly.
+                    pending = [
+                        (i, spec) for i, spec in claimed if not spec.done.is_set()
+                    ]
+                    for i, spec in claimed:
+                        if spec.done.is_set():
+                            out[i] = spec.result(0)
+                            spec.state = "claimed"
+                    if pending:
+
+                        def _wait_one(i: int, spec: Speculation) -> int:
+                            budget = _claim_wait_budget(spec, single, launcher)
+                            try:
+                                if budget <= 0:
+                                    raise TimeoutError
+                                out[i] = spec.result(timeout=budget)
+                                spec.state = "claimed"
+                                return -1
+                            except TimeoutError:
+                                spec.state = "evicted"
+                                return i
+
+                        with ThreadPoolExecutor(
+                            max_workers=min(len(pending), 8)
+                        ) as pool:
+                            waited = [
+                                i
+                                for i in pool.map(
+                                    lambda pair: _wait_one(*pair), pending
+                                )
+                                if i >= 0
+                            ]
+                if waited:
+                    # hedge the elements whose speculations missed their budget
+                    bus.emit(
+                        "claim_hedge",
+                        key=spec_key(single, (prompts[waited[0]],) + rest, clean),
+                        tool=single.name,
+                        waited_ms=0.0,
+                    )
+                    rargs, rkwargs = rejoin_batch_call(
+                        [prompts[i] for i in waited], rest, clean, kwname
+                    )
+                    batch_res = _tool.fn(*rargs, **rkwargs)
+                    for j, i in enumerate(waited):
+                        out[i] = batch_res[j]
                 return out
-            return _claim_or_run(_tool, tuple(args), kwargs, store, bus)
+            return _claim_or_run(_tool, tuple(args), kwargs, store, bus, launcher)
 
         hooks[name] = tag_claim_hook(hook, raw_fn=tool.fn)
     return hooks
 
 
-def _claim_or_run(
-    tool: ToolSpec, args: tuple, kwargs: dict, store: SpecStore, bus
-) -> Any:
-    """Claim a speculation for one call; on hit wait for and return its result,
-    on miss run the real tool (the baseline path)."""
-    key = spec_key(tool, args, kwargs)
-    t0 = time.perf_counter()
-    spec = store.claim(key, reuse=tool.deterministic)
-    if spec is not None:
-        if spec is current_spec():
-            # self-claim guard: this hook is being run BY the very worker that
-            # must resolve `spec`; waiting on it would block the pool (and
-            # interpreter shutdown) for the full timeout. Run the raw tool.
-            return raw_tool_fn(tool)(*args, **kwargs)
-        bus.emit(
-            "claim_hit",
-            key=key,
-            seq=spec.seq,
-            tool=tool.name,
-            already_ready=spec.done.is_set(),
-        )
-        result = spec.result(timeout=600)
-        spec.state = "claimed"
-        bus.emit(
-            "claim_done",
-            key=key,
-            seq=spec.seq,
-            waited_ms=(time.perf_counter() - t0) * 1000,
-        )
-        return result
-    bus.emit("claim_miss", key=key, tool=tool.name)
-    return tool.fn(*args, **kwargs)
-
-
-def _async_real_hook(tool: ToolSpec, reg, store: SpecStore, bus):
+def _async_real_hook(tool: ToolSpec, reg, store: SpecStore, bus, launcher=None):
     """Claim-or-run for an ``async def`` tool. The hook is itself a coroutine
     function, so model code keeps its natural shape (``await llm(x)``,
     ``asyncio.gather(...)``) — and a claim never blocks the caller's event
     loop, so sibling gather branches that MISSED still run concurrently."""
 
+    @functools.wraps(tool.fn)
     async def hook(*args: Any, _tool=tool, **kwargs: Any):
         if not _tool.speculatable:
             return await _tool.fn(*args, **kwargs)
-        if _is_batched(_tool) and args and isinstance(args[0], (list, tuple)):
+        split = split_batch_call(args, kwargs) if _is_batched(_tool) else None
+        if split is not None:
             single = _single_of(_tool, reg)
-            prompts, rest = list(args[0]), tuple(args[1:])
+            prompts, rest, clean, kwname = split
             out: list[Any] = [None] * len(prompts)
             misses: list[int] = []
             claimed: list[tuple[int, Speculation]] = []
             cur = current_spec()
             for i, p in enumerate(prompts):
-                key = spec_key(single, (p,) + rest, kwargs)
+                key = spec_key(single, (p,) + rest, clean)
                 spec = store.claim(key, reuse=single.deterministic)
                 if spec is None or spec is cur:
                     # self-claim guard: waiting on our own worker's done would deadlock the pool
@@ -227,17 +484,43 @@ def _async_real_hook(tool: ToolSpec, reg, store: SpecStore, bus):
             async def _fill_misses():
                 if not misses:
                     return
-                res = await _tool.fn([prompts[i] for i in misses], *rest, **kwargs)
+                rargs, rkwargs = rejoin_batch_call(
+                    [prompts[i] for i in misses], rest, clean, kwname
+                )
+                res = await _tool.fn(*rargs, **rkwargs)
                 for j, i in enumerate(misses):
                     out[i] = res[j]
 
+            hedged: list[int] = []
+
             async def _fill_claim(i: int, spec: Speculation):
-                out[i] = await _await_spec(spec)
-                spec.state = "claimed"
+                budget = (
+                    _claim_wait_budget(spec, single, launcher)
+                    if not spec.done.is_set() and launcher is not None
+                    else 600.0
+                )
+                if budget <= 0:
+                    hedged.append(i)
+                    spec.state = "evicted"
+                    return
+                try:
+                    out[i] = await _await_spec(spec, budget)
+                    spec.state = "claimed"
+                except (TimeoutError, asyncio.TimeoutError):
+                    hedged.append(i)
+                    spec.state = "evicted"
 
             await asyncio.gather(
                 _fill_misses(), *[_fill_claim(i, s) for i, s in claimed]
             )
+            if hedged:
+                # hedge the elements whose speculations missed their budget
+                rargs, rkwargs = rejoin_batch_call(
+                    [prompts[i] for i in hedged], rest, clean, kwname
+                )
+                res = await _tool.fn(*rargs, **rkwargs)
+                for j, i in enumerate(hedged):
+                    out[i] = res[j]
             return out
         key = spec_key(_tool, tuple(args), kwargs)
         spec = store.claim(key, reuse=_tool.deterministic)
@@ -245,6 +528,15 @@ def _async_real_hook(tool: ToolSpec, reg, store: SpecStore, bus):
             # self-claim guard: waiting on our own worker's done would deadlock the pool
             bus.emit("claim_miss", key=key, tool=_tool.name)
             return await _tool.fn(*args, **kwargs)  # miss: the baseline path
+        budget = (
+            _claim_wait_budget(spec, _tool, launcher)
+            if not spec.done.is_set() and launcher is not None
+            else 600.0
+        )
+        if budget <= 0:
+            spec.state = "evicted"
+            bus.emit("claim_miss", key=key, tool=_tool.name)
+            return await _tool.fn(*args, **kwargs)  # hedge: queue drain too slow
         bus.emit(
             "claim_hit",
             key=key,
@@ -252,7 +544,51 @@ def _async_real_hook(tool: ToolSpec, reg, store: SpecStore, bus):
             tool=_tool.name,
             already_ready=spec.done.is_set(),
         )
-        result = await _await_spec(spec)
+        try:
+            result = await _await_spec(spec, budget)
+        except (TimeoutError, asyncio.TimeoutError):
+            # race a duplicate instead of rerunning: see _race_hedge
+            dup = None
+            if launcher is not None:
+                try:
+                    dup = launcher.dispatch(_tool, tuple(args), dict(kwargs), "hedge")
+                except Exception:
+                    dup = None
+            if dup is None or dup is spec:
+                spec.state = "evicted"
+                bus.emit("claim_miss", key=key, tool=_tool.name)
+                return await _tool.fn(*args, **kwargs)  # hedge after the budget
+            deadline = time.monotonic() + _MAX_CLAIM_WAIT_S
+            while time.monotonic() < deadline:
+                if spec.done.is_set():
+                    if spec.state != "evicted" and spec.error is None:
+                        _evict(dup)
+                        result = spec.result(0)
+                        spec.state = "claimed"
+                        return result
+                    break
+                if dup.done.is_set():
+                    if dup.error is None and dup.state != "evicted":
+                        _evict(spec)
+                        result = dup.result(0)
+                        dup.state = "claimed"
+                        return result
+                    break
+                await asyncio.sleep(0.002)
+            if spec.done.is_set() and spec.state != "evicted" and spec.error is None:
+                _evict(dup)
+                result = spec.result(0)
+                spec.state = "claimed"
+                return result
+            if dup.done.is_set() and dup.error is None and dup.state != "evicted":
+                _evict(spec)
+                result = dup.result(0)
+                dup.state = "claimed"
+                return result
+            _evict(spec)
+            _evict(dup)
+            bus.emit("claim_miss", key=key, tool=_tool.name)
+            return await _tool.fn(*args, **kwargs)
         spec.state = "claimed"
         return result
 
@@ -260,7 +596,11 @@ def _async_real_hook(tool: ToolSpec, reg, store: SpecStore, bus):
 
 
 async def _await_spec(spec: Speculation, timeout: float = 600.0) -> Any:
-    """Wait for an in-flight speculation without stalling the event loop."""
+    """Wait for an in-flight speculation without stalling the event loop.
+
+    ``timeout`` doubles as the claim budget: on expiry ``spec.result`` raises
+    :class:`TimeoutError` and the caller hedges.
+    """
     if spec.done.is_set():
         return spec.result(0)
     return await asyncio.to_thread(spec.result, timeout)
@@ -294,13 +634,14 @@ def make_shadow_hooks(reg, store: SpecStore, launcher, bus=None) -> dict[str, An
                 raise RuntimeError(
                     f"{_tool.name} args depend on a non-speculated result"
                 )
-            if _is_batched(_tool) and args and isinstance(args[0], (list, tuple)):
+            split = split_batch_call(args, kwargs) if _is_batched(_tool) else None
+            if split is not None:
                 # llm_query_batched: dispatch per element so the real run can
                 # claim elementwise; return a list of SpecValues.
-                prompts = list(args[0])
+                prompts, rest, clean, _kwname = split
                 specs = [
                     launcher.dispatch_or_adopt(
-                        _single_of(_tool, reg), (p,) + args[1:], kwargs, "shadow"
+                        _single_of(_tool, reg), (p,) + rest, clean, "shadow"
                     )
                     for p in prompts
                 ]

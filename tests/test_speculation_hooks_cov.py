@@ -341,3 +341,101 @@ def test_shadow_batched_budget_denied_yields_none():
         assert out[1] is None
     finally:
         session.close()
+
+
+# -- zero claim-wait budget: sync batched hedge (line 409) ---------------------
+
+
+class _SlowQueueLauncher:
+    """Latency-aware launcher whose deep queue zeroes every claim wait budget."""
+
+    latency_aware = True
+    max_claim_wait_s = 30.0
+
+    def __init__(self) -> None:
+        from types import SimpleNamespace
+
+        self.budget = SimpleNamespace(max_inflight=1)
+
+    def ewma_ms(self, name: str, hint: float) -> float:
+        return 5000.0
+
+    def queued_depth(self) -> int:
+        return 100
+
+
+def _pending_spec(session, single, prompt):
+    """Insert a never-started (pending) speculation for one prompt."""
+    from dspy_rlm_hooks.speculation.store import Speculation
+    from dspy_rlm_hooks.speculation.tool import spec_key
+
+    spec = Speculation(
+        key=spec_key(single, (prompt,), {}),
+        seq=session.launcher.next_seq(),
+        args=(prompt,),
+        kwargs={},
+        source="shadow",
+        state="pending",
+    )
+    session.store.put(spec)
+    return spec
+
+
+def test_sync_batched_claim_zero_budget_hedges_element():
+    """A claimed element whose wait budget is 0 raises TimeoutError inside
+    _wait_one, is evicted, and is hedged through the real batched fn."""
+    batch_calls: list[list[str]] = []
+
+    def llm(prompt: str) -> str:
+        return f"r:{prompt}"
+
+    def llm_batched(prompts: list[str]) -> list[str]:
+        batch_calls.append(list(prompts))
+        return [f"r:{p}" for p in prompts]
+
+    reg = _reg(
+        llm_query=(llm, {"speculatable": True, "pure": True}),
+        llm_query_batched=(llm_batched, {"speculatable": True, "pure": True}),
+    )
+    session = SpecSession(reg)
+    try:
+        single = reg.get("llm_query")
+        assert single is not None
+        spec = _pending_spec(session, single, "a")
+        hooks = make_real_hooks(reg, session.store, _SlowQueueLauncher())
+        out = hooks["llm_query_batched"](["a", "b"])
+        assert out == ["r:a", "r:b"]
+        assert spec.state == "evicted"
+        # misses run first ("b"), then the hedged claimed element ("a")
+        assert batch_calls == [["b"], ["a"]]
+    finally:
+        session.close()
+
+
+async def test_async_batched_claim_zero_budget_hedges_element():
+    """The async batched hook hedges an element whose claim budget is 0."""
+    batch_calls: list[list[str]] = []
+
+    async def llm(prompt: str) -> str:
+        return f"r:{prompt}"
+
+    async def llm_batched(prompts: list[str]) -> list[str]:
+        batch_calls.append(list(prompts))
+        return [f"r:{p}" for p in prompts]
+
+    reg = _reg(
+        llm_query=(llm, {"speculatable": True, "pure": True}),
+        llm_query_batched=(llm_batched, {"speculatable": True, "pure": True}),
+    )
+    session = SpecSession(reg)
+    try:
+        single = reg.get("llm_query")
+        assert single is not None
+        spec = _pending_spec(session, single, "a")
+        hooks = make_real_hooks(reg, session.store, _SlowQueueLauncher())
+        out = await hooks["llm_query_batched"](["a", "b"])
+        assert out == ["r:a", "r:b"]
+        assert spec.state == "evicted"
+        assert batch_calls == [["b"], ["a"]]
+    finally:
+        session.close()

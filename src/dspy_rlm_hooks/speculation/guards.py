@@ -56,6 +56,30 @@ def raw_of(fn: Any, fallback: Any = None) -> Any:
     return raw if raw is not None else fallback
 
 
+def fully_raw(fn: Any, fallback: Any = None, _max_depth: int = 64) -> Any:
+    """Strip EVERY layer of hook wrapping down to the true raw tool.
+
+    Per-execution re-installation nests wrappers: generation N's tagged hook
+    wraps generation N-1's, whose ``raw_fn`` is itself a counter wrapper built
+    over the previous generation. ``raw_of`` unwraps only one tag layer, so a
+    registry ``fn`` pointed at an intermediate wrapper re-enters the real claim
+    hook on a miss and recurses (each level claims again, misses, and calls
+    itself). This walks the tag chain and the ``functools.wraps`` chain until
+    neither applies, so callers always reach the genuine implementation.
+    """
+    seen = 0
+    while seen < _max_depth:
+        nxt = raw_of(fn, fallback=None) if is_claim_hook(fn) else None
+        if nxt is None:
+            wrapped = getattr(fn, "__wrapped__", None)
+            if wrapped is None or wrapped is fn:
+                break
+            nxt = wrapped
+        fn = nxt
+        seen += 1
+    return fn if fn is not None else fallback
+
+
 def raw_tool_fn(tool: Any) -> Any:
     """The callable to execute for ``tool`` — never a claim hook.
 

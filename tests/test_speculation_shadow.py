@@ -26,6 +26,7 @@ from dspy_rlm_hooks.speculation.shadow import (
     _shadow_worker,
     _worker_exec,
     _worker_peek,
+    classify_ns,
 )
 from dspy_rlm_hooks.speculation.store import SpecStore, Speculation
 from dspy_rlm_hooks.speculation.streaming import Segment
@@ -485,22 +486,24 @@ def test_worker_exec_runaway_watchdog_aborts():
 
 def test_worker_peek_sends_plans():
     conn = _FakeConn([])
-    _worker_peek(conn, "llm_query('q')", {"llm_query"}, {})
+    _worker_peek(conn, "llm_query('q')", {"llm_query"}, {}, {}, {})
     assert len(conn.sent) == 1
-    kind, plans = conn.sent[0]
+    kind, plans, metas = conn.sent[0]
     assert kind == "plans"
     assert [p.tool for p in plans] == ["llm_query"]
 
 
 def test_worker_peek_survives_planning_failure(monkeypatch):
     # if plan_peeks raises, the worker degrades to no plans instead of crashing
-    def boom(tail, spec_names, ns):
+    def boom(tail, spec_names, ns, segment_productions=None):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("dspy_rlm_hooks.speculation.shadow.plan_peeks", boom)
+    monkeypatch.setattr(
+        "dspy_rlm_hooks.speculation.shadow.plan_peeks_with_chains", boom
+    )
     conn = _FakeConn([])
-    _worker_peek(conn, "llm_query('q')", {"llm_query"}, {})
-    assert conn.sent == [("plans", [])]
+    _worker_peek(conn, "llm_query('q')", {"llm_query"}, {}, {}, {})
+    assert conn.sent == [("plans", [], [])]
 
 
 # -- _shadow_worker -------------------------------------------------------------
@@ -519,7 +522,7 @@ def test_shadow_worker_processes_messages_then_closes():
         conn,
         parent,
         {
-            "ns": {"x": 1, "f": lambda: 1},
+            "ns_seed": classify_ns({"x": 1, "f": lambda: 1}),
             "spec_names": {"llm_query"},
             "taint_skip": True,
             "budget": 1.0,
@@ -537,7 +540,7 @@ def test_worker_worker_survives_oserror():
     _shadow_worker(
         conn,
         parent,
-        {"ns": {}, "spec_names": set(), "taint_skip": True, "budget": 1.0},
+        {"ns_seed": {}, "spec_names": set(), "taint_skip": True, "budget": 1.0},
     )
     assert conn.closed
 
@@ -730,3 +733,24 @@ def test_handle_plans_retracts_stale_peek_bets():
     runner.finish()
     assert runner.join(10)
     assert len(store) == 0  # stale peek bets evicted via evict_unadopted_peeks
+
+
+# -- _mp_context fork fallback (lines 211-213) ---------------------------------
+
+
+def test_mp_context_falls_back_when_fork_unavailable(monkeypatch):
+    """A platform without fork (Windows) falls back to the default context."""
+    import multiprocessing
+
+    from dspy_rlm_hooks.speculation import shadow
+
+    real_get_context = multiprocessing.get_context
+
+    def fake_get_context(name=None):
+        if name == "fork":
+            raise ValueError("fork is not available on this platform")
+        return real_get_context(name)
+
+    monkeypatch.setattr(multiprocessing, "get_context", fake_get_context)
+    ctx = shadow._mp_context()
+    assert ctx.get_start_method() != "fork"

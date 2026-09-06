@@ -17,12 +17,13 @@ Covers AC3-AC8 and AC10-AC13:
 from __future__ import annotations
 
 import time
-from types import MethodType
+from types import MethodType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from dspy_rlm_hooks import PostExecutionOutput, PreExecutionOutput, enable_rlm_hooks
+from dspy_rlm_hooks.speculation.config import SpeculationConfig
 from dspy_rlm_hooks.speculation_integration import (
     _install_claim_hooks,
     _make_claim_hook,
@@ -31,6 +32,7 @@ from dspy_rlm_hooks.speculation_integration import (
     disable_rlm_speculation,
     enable_rlm_speculation,
 )
+from dspy_rlm_hooks.speculator import Speculator
 
 
 def _real_execute_code(repl, code, input_args):
@@ -52,12 +54,33 @@ def _make_execute(tools):
 
 
 def _setup_real(mock_rlm, mock_repl, tools):
-    """Wire a mock RLM/repl so real execution actually runs code + claim hooks."""
+    """Wire a mock RLM/repl so real execution actually runs code + claim hooks.
+
+    Counter-free speculative llm executions call ``sub_lm`` directly, so the
+    sub-LM is routed through the SAME recording doubles the tools use — a
+    speculative llm execution and a real one are then indistinguishable in the
+    recorded call list, which is what the AC assertions check.
+    """
     mock_rlm.max_llm_calls = 50
     mock_repl.tools = tools
     mock_repl.execute = _make_execute(tools)
     mock_rlm._execute_code = _real_execute_code
+    mock_rlm.sub_lm = _SubLMRouter(tools)
     return mock_rlm, mock_repl
+
+
+class _SubLMRouter:
+    """sub_lm stand-in: routes prompts to the recorded tool double."""
+
+    def __init__(self, tools: dict) -> None:
+        self._tools = dict(tools)  # snapshot the RAW fns (repl.tools gets hooks)
+
+    def __call__(self, prompt: str):
+        fn = self._tools.get("llm_query")
+        if fn is None:
+            return [{"text": f"[no llm_query] {prompt}"}]
+        result = fn(prompt)
+        return [{"text": result}]
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +123,9 @@ def test_ac4_parallelism(mock_rlm, mock_repl):
 
     tools = {"llm_query": llm_query}
     _setup_real(mock_rlm, mock_repl, tools)
-    enable_rlm_speculation(mock_rlm, max_inflight=4)
+    # latency_aware=False preserves the strict no-re-call invariant: claims on
+    # queued speculations wait rather than hedge (asserted below).
+    enable_rlm_speculation(mock_rlm, max_inflight=4, latency_aware=False)
 
     n = 16
     code = "\n".join(f"x{i} = llm_query('q{i}')" for i in range(n))
@@ -114,6 +139,38 @@ def test_ac4_parallelism(mock_rlm, mock_repl):
     assert elapsed < n * latency
     # Each call dispatched once and claimed (no re-call).
     assert len(real_calls) == n
+
+
+def test_latency_aware_claim_hedges_deep_queue(mock_rlm, mock_repl):
+    """With latency-aware claiming, a claim on a queued-not-started speculation
+    hedges (runs the real tool) when the queue would drain slower than simply
+    duplicating the call. Results stay correct; extra real executions are
+    bounded by the queue depth, never a wholesale re-run."""
+    latency = 0.3
+    real_calls = []
+
+    def llm_query(prompt):
+        real_calls.append(prompt)
+        time.sleep(latency)
+        return f"r:{prompt}"
+
+    tools = {"llm_query": llm_query}
+    _setup_real(mock_rlm, mock_repl, tools)
+    enable_rlm_speculation(mock_rlm, max_inflight=2, latency_aware=True)
+
+    n = 12
+    code = "\n".join(f"x{i} = llm_query('q{i}')" for i in range(n))
+    t0 = time.perf_counter()
+    mock_rlm._execute_code(mock_repl, code, {})
+    elapsed = time.perf_counter() - t0
+
+    # results are correct whether served from speculation or a hedged real call
+    # (the mock repl returns whatever the hooks return); no result check here —
+    # instead assert bounded total work and progress:
+    assert elapsed < n * latency  # still massively parallel, not serial
+    # speculation avoided a wholesale re-run: at most the queue depth of calls
+    # hedged (12 speculated executions + at most max_inflight*2 hedged dups)
+    assert len(real_calls) <= n + 4
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +244,7 @@ def test_ac7_hook_composition(mock_rlm, mock_repl, mock_variables, mock_history)
 
     tools = {"llm_query": llm_query}
     mock_rlm.max_llm_calls = 50
+    mock_rlm.sub_lm = _SubLMRouter(tools)
     mock_repl.tools = tools
     mock_repl.execute = _make_execute(tools)
 
@@ -279,6 +337,7 @@ async def test_ac11_async_path(mock_rlm, mock_repl, mock_variables, mock_history
 
     tools = {"llm_query": llm_query}
     mock_rlm.max_llm_calls = 50
+    mock_rlm.sub_lm = _SubLMRouter(tools)
     mock_repl.tools = tools
     mock_repl.execute = _make_execute(tools)
 
@@ -314,6 +373,7 @@ def test_ac12_real_interpreter_claim_bridge(mock_rlm):
 
     mock_rlm.max_llm_calls = 50
     mock_rlm._execute_code = _real_execute_code
+    mock_rlm.sub_lm = _SubLMRouter({"llm_query": llm_query})
     enable_rlm_speculation(mock_rlm)
 
     with PythonInterpreter(tools={"llm_query": llm_query}) as repl:
@@ -351,6 +411,7 @@ def test_ac13_order1_hooks_then_speculation(
 
     tools = {"llm_query": llm_query}
     mock_rlm.max_llm_calls = 50
+    mock_rlm.sub_lm = _SubLMRouter(tools)
     mock_repl.tools = tools
     mock_repl.execute = _make_execute(tools)
 
@@ -812,3 +873,55 @@ def test_launcher_dispatch_never_runs_claim_hook(mock_rlm, mock_repl):
     assert dispatched.done.wait(5.0)  # resolves fast — no self-claim block
     assert dispatched.result() == 6
     assert real_calls == [3]  # the RAW tool ran once
+
+
+def test_tools_mapping_tuple_form_applies_policy():
+    """tools={"name": (fn, {"deterministic": True})} must register the CALLABLE
+    (not the tuple) and apply the policy kwargs (regression: the tuple was
+    silently stored as ToolSpec.fn and deterministic was dropped)."""
+    from unittest.mock import MagicMock
+
+    rlm = MagicMock()
+    rlm._execute_code = MagicMock(return_value="ok")
+    rlm._execute_iteration = MagicMock(return_value=MagicMock())
+    rlm._aexecute_iteration = MagicMock(return_value=MagicMock())
+    rlm._process_execution_result = MagicMock(return_value=MagicMock())
+    rlm.generate_action = MagicMock()
+    rlm.generate_action.acall = AsyncMock(return_value=MagicMock())
+    rlm.max_llm_calls = 50
+
+    def read_file(path):
+        return "x"
+
+    enable_rlm_speculation(
+        rlm,
+        tools={
+            "read_file": (read_file, {"deterministic": True, "latency_hint_ms": 42.0})
+        },
+        speculate_user_tools=True,
+    )
+    tool = rlm._speculator.registry.get("read_file")
+    assert tool is not None
+    assert callable(tool.fn)  # NOT the tuple
+    assert tool.fn.__name__ == "read_file"
+    assert tool.deterministic is True  # policy kwargs applied
+    assert tool.latency_hint_ms == 42.0
+    disable_rlm_speculation(rlm)
+
+
+def test_install_claim_hooks_non_introspectable_tool_signature():
+    """A builtin (non-introspectable) user tool must not crash claim-hook
+    installation — the signature fallback leaves the hook untouched."""
+
+    from dspy_rlm_hooks.speculation.guards import is_claim_hook
+    from dspy_rlm_hooks.speculation_integration import _install_claim_hooks
+
+    program = SimpleNamespace(max_llm_calls=50)
+    spec = Speculator()
+    # `type` has NO introspectable signature: inspect.signature raises
+    # ValueError, exercising the fallback in _install_claim_hooks
+    spec.registry.register("weird", type, speculatable=True, pure=True)
+    config = SpeculationConfig()
+    repl = SimpleNamespace(tools={"weird": type}, _tools_registered=False)
+    _install_claim_hooks(repl, spec, config, program)
+    assert is_claim_hook(repl.tools["weird"])

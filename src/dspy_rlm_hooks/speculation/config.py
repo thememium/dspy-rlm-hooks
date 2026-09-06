@@ -37,6 +37,10 @@ class SpeculationConfig(pydantic.BaseModel):
             overlap with main-context token generation. When ``False``, the
             Lazy/JIT one-shot shadow runs over the fully assembled code block
             after generation (the pre-streaming behaviour).
+        persistent_shadow: When ``True`` (default), one shadow subprocess is
+            kept warm across iterations (reset per turn, respawned on crash)
+            instead of spawning a fresh process per iteration. Spawning plus
+            re-serializing the context cost ~1.3s per iteration before this.
     """
 
     enabled: bool = True
@@ -47,6 +51,8 @@ class SpeculationConfig(pydantic.BaseModel):
     speculate_user_tools: bool = False
     timeout_s: float = 5.0
     streaming: bool = True
+    persistent_shadow: bool = True
+    latency_aware: bool = True
 
 
 @dataclass

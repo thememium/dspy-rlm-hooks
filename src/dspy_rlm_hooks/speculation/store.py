@@ -51,7 +51,8 @@ class Speculation:
     done: threading.Event = field(default_factory=threading.Event)  # set on resolve
     adopted: bool = False  # a shadow hook took ownership of this peek
     cancel: Callable[[], None] | None = None  # abort in-flight on eviction
-    dispatched_at: float | None = None  # monotonic() timestamp
+    dispatched_at: float | None = None  # monotonic() at enqueue time
+    started_at: float | None = None  # monotonic() when a worker actually began
     resolved_at: float | None = None  # monotonic() timestamp
 
     def wait(self, timeout: float | None = None) -> bool:
