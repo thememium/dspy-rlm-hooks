@@ -395,21 +395,56 @@ _SNAPSHOT_PROBE = (
 def _snapshot_reads(tree: ast.Module) -> set[str]:
     required: set[str] = set()
     bound: set[str] = set()
+    imports: set[str] = set()  # survive bound.clear(); always available at module level
     for statement in tree.body:
         reads = _free_names(statement)
         for node in ast.walk(statement):
             if isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
                 reads.add(node.target.id)
-        required.update(reads - bound)
+        required.update(reads - bound - imports)
         if isinstance(statement, ast.Assign):
             bound.update(
                 target.id
                 for target in statement.targets
                 if isinstance(target, ast.Name)
             )
+        elif isinstance(statement, (ast.Import, ast.ImportFrom)):
+            # import X / from X import Y bind names just like assignments.
+            # Without this, `import time` followed by `time.perf_counter`
+            # would treat `time` as a free name needing snapshot, triggering
+            # an expensive REPL probe that the snapshot filter would discard
+            # anyway (modules are filtered by isinstance check in the probe).
+            for alias in statement.names:
+                imports.add(alias.asname or alias.name)
         else:
             bound.clear()
     return required
+
+
+def _pure_assigned_names(tree: ast.Module) -> set[str]:
+    """Names that are assigned WITHOUT being read in the same assignment's value.
+
+    For ``now = time.perf_counter``, the target ``now`` does not appear in the
+    value — it's a pure overwrite and the REPL snapshot is useless (the code's
+    own assignment will replace whatever the snapshot provides).
+
+    For ``value = value + 'new'``, the target ``value`` IS read in the value —
+    the snapshot is needed because the code reads the old value.
+
+    Only top-level (non-nested) assignments are considered, matching the
+    scoping rules of ``_snapshot_reads``.
+    """
+    out: set[str] = set()
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign):
+            value_reads = {n.id for n in ast.walk(stmt.value) if isinstance(n, ast.Name)}
+            for target in stmt.targets:
+                if isinstance(target, ast.Name) and target.id not in value_reads:
+                    out.add(target.id)
+        elif isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            for alias in stmt.names:
+                out.add(alias.asname or alias.name)
+    return out
 
 
 def _live_state_seed(
@@ -424,11 +459,22 @@ def _live_state_seed(
     """
     seed = dict(input_args)
     try:
-        free = _snapshot_reads(ast.parse(code))
+        tree = ast.parse(code)
+        free = _snapshot_reads(tree)
     except (SyntaxError, ValueError):
         return seed
     tool_names = set(spec.registry.names()) if spec.registry else set()
     requested = free - seed.keys() - tool_names - set(dir(builtins))
+    if not requested:
+        return seed
+    # Names that the code itself assigns without reading are not worth
+    # snapshotting — the code's own assignment will overwrite whatever the
+    # REPL snapshot provides.  This catches names that ``_snapshot_reads``
+    # marks as free because ``bound.clear()`` loses track of them after
+    # control flow statements.  Names that ARE read before assignment
+    # (``value = value + 'new'``) are correctly preserved.
+    pure_assigned = _pure_assigned_names(tree)
+    requested -= pure_assigned
     if not requested:
         return seed
     try:
@@ -473,6 +519,12 @@ def _maybe_begin_streaming_turn(
         return
     try:
         _sync_registry_fns(spec, repl)
+        # Reset per-forward() exec counter when a fresh REPL is detected.
+        # The REPL is created anew each forward() call, so a different object
+        # means we're starting a new run.
+        if getattr(rlm, "_spec_last_repl", None) is not repl:
+            rlm._spec_exec_count = 0
+            rlm._spec_last_repl = repl
         turn = spec.session.begin_stream_turn(
             dict(input_args), shadow_builtins(dict(builtins.__dict__))
         )
@@ -634,6 +686,18 @@ def _speculation_execute_code(
     assembled = _assemble_execution_code(repl, code)
     _sync_registry_fns(spec, repl)
 
+    # Reset per-forward() exec counter when a fresh REPL is detected
+    # (non-streaming path: _maybe_begin_streaming_turn handles the streaming path).
+    if getattr(self, "_spec_last_repl", None) is not repl:
+        self._spec_exec_count = 0
+        self._spec_last_repl = repl
+
+    # First-iteration fast path: the REPL starts empty (no prior iterations),
+    # so the live-state snapshot is guaranteed to return nothing.  Skip the
+    # expensive repl.execute() round-trip (~775ms on Deno subprocess).
+    first_exec = not getattr(self, "_spec_exec_count", 0)
+    self._spec_exec_count = getattr(self, "_spec_exec_count", 0) + 1
+
     # A streaming turn is active when it was begun by the patched iteration
     # method (streaming mode). Otherwise fall back to the Lazy/JIT one-shot pass.
     turn = getattr(self, "_active_stream_turn", None)
@@ -642,8 +706,9 @@ def _speculation_execute_code(
         if _has_speculatable(spec):
             t = None
             try:
+                seed = dict(input_args) if first_exec else _live_state_seed(repl, code, input_args, spec)
                 t = spec.session.begin_stream_turn(
-                    _live_state_seed(repl, code, input_args, spec),
+                    seed,
                     shadow_builtins(dict(builtins.__dict__)),
                 )
                 # CRITICAL: StreamSegmenter only emits inside ```repl fences.
@@ -661,17 +726,18 @@ def _speculation_execute_code(
         # generation; variables created by EARLIER iterations are unknown to
         # the persistent worker. Re-hydrate the live snapshot as assignments
         # BEFORE the code so in-flight speculation sees current values.
-        try:
-            snap = _live_state_seed(repl, code, input_args, spec)
-            assigns = "".join(
-                f"{name} = {value!r}\n"
-                for name, value in snap.items()
-                if name not in input_args
-            )
-            if assigns:
-                turn.feed(f"```repl\n{assigns}\n```\n")
-        except Exception:
-            pass  # snapshot errors are SAFE: real execution is unaffected
+        if not first_exec:
+            try:
+                snap = _live_state_seed(repl, code, input_args, spec)
+                assigns = "".join(
+                    f"{name} = {value!r}\n"
+                    for name, value in snap.items()
+                    if name not in input_args
+                )
+                if assigns:
+                    turn.feed(f"```repl\n{assigns}\n```\n")
+            except Exception:
+                pass  # snapshot errors are SAFE: real execution is unaffected
         # Streaming turn is active (begun during generate_action). If it
         # produced no code deltas (cache hit, stream failure, or unfenced
         # output), top up with the full assembled block so the turn still
