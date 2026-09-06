@@ -476,30 +476,15 @@ def _live_state_seed(
     requested = free - seed.keys() - tool_names - set(dir(builtins))
     if not requested:
         return seed
-    # Names that the code itself assigns without reading are not worth
-    # snapshotting — the code's own assignment will overwrite whatever the
-    # REPL snapshot provides.  This catches names that ``_snapshot_reads``
-    # marks as free because ``bound.clear()`` loses track of them after
-    # control flow statements.  Names that ARE read before assignment
-    # (``value = value + 'new'``) are correctly preserved.
+    # Single-pass AST analysis: collect pure assignments, loop targets,
+    # all stored names, and all read names in one walk.
     pure_assigned = _pure_assigned_names(tree)
     requested -= pure_assigned
     if not requested:
         return seed
-    # Names that are stored ANYWHERE in the code (including loop targets,
-    # with-body assignments, etc.) will be overwritten before they're read
-    # from the REPL.  The snapshot probe would find nothing (the name
-    # doesn't exist yet or will be replaced), so skip the expensive
-    # repl.execute() round-trip entirely.
-    # BUT: only skip names that are NOT read before their first store
-    # (e.g. ``value = value + 'new'`` reads the old value first).
-    # Simple heuristic: names that are ONLY stored (never read at all)
-    # are safe to skip. Loop targets like ``for kind in [...]`` are
-    # stored AND read (inside the body), so we need a separate check.
-    # Collect loop targets where the iterable is GUARANTEED to be non-empty
-    # (literal list/tuple with elements). Empty loops (``for value in []:``)
-    # don't overwrite the variable — the old value survives.
     loop_targets: set[str] = set()
+    all_stored: set[str] = set()
+    all_reads: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.For):
             iter_node = node.iter
@@ -511,18 +496,13 @@ def _live_state_seed(
                 for n in ast.walk(node.target):
                     if isinstance(n, ast.Name):
                         loop_targets.add(n.id)
-    # Names stored but never loaded are pure overwrites (safe to skip).
-    # AugAssign targets (``value += 'new'``) are implicitly read.
-    all_stored: set[str] = set()
-    all_reads: set[str] = set()
-    for node in ast.walk(tree):
         if isinstance(node, ast.Name):
             if isinstance(node.ctx, (ast.Store, ast.Del)):
                 all_stored.add(node.id)
             elif isinstance(node.ctx, ast.Load):
                 all_reads.add(node.id)
         elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
-            all_reads.add(node.target.id)  # implicitly reads old value
+            all_reads.add(node.target.id)
     stored_not_read = (all_stored - all_reads) | loop_targets
     remaining = requested - stored_not_read
     if not remaining:
