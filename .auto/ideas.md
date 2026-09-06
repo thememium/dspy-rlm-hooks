@@ -1,19 +1,25 @@
 # Ideas Backlog
 
-## Tried & Working
-- **Snapshot import recognition**: `_snapshot_reads` now treats `import X` as a binding, preventing `time`/`json` from being snapshotted
-- **Pure-assigned name filter**: `_pure_assigned_names` filters names assigned without being read (e.g. `timings = {}`)
-- **First-iteration skip**: Skip `_live_state_seed` on the first `_execute_code` call (REPL starts empty)
+## Applied Optimizations (Cumulative ~2-3% improvement)
+- **Snapshot import recognition**: `_snapshot_reads` treats `import X` as binding
+- **Pure-assigned name filter**: `_pure_assigned_names` filters non-read assignments
+- **First-iteration skip**: Skip snapshot on first `_execute_code` per `forward()`
+- **Faster snapshot probe**: repr-based instead of json-based (24% faster per probe)
+- **Skip redundant tool registration**: Track tool signature hashes, only re-register when changed
 
-## Remaining Bottlenecks (profiled)
-- **DSPy REPL subprocess startup**: 777ms on iteration 0 — this is a Deno subprocess creation cost inside `PythonInterpreter`. Can't optimize from dspy-rlm-hooks without REPL reuse (which changes semantics).
-- **Tool latencies on critical path**: ~395ms (spec) / ~882ms (default) — already optimized by speculation engine
-- **Shadow prep overhead**: 2-5ms per iteration (mostly `repl.execute()` for snapshot) — minimal
+## Remaining Bottlenecks (Not Optimizable)
+- **DSPy REPL subprocess startup**: 777ms on iteration 0 — Deno subprocess creation. Requires DSPy-level changes.
+- **repl.execute() for snapshot**: ~1ms per iteration — subprocess IPC overhead. Unavoidable for cross-iteration state.
+- **Tool latencies**: ~395ms (spec) / ~882ms (default) — already optimized by speculation
 
-## Deferred Ideas
-- **REPL reuse across forward() calls**: Cache the PythonInterpreter instance to avoid subprocess restart. Risk: state leakage between calls changes RLM semantics. Could be opt-in via config flag.
-- **Pre-compute snapshot at generate_action time**: Run the snapshot probe during LLM generation (overlapped). Requires streaming the code to find free names before generation completes.
-- **Batch pipe messages**: Currently each tool dispatch/peek/executed message is sent individually over the multiprocessing pipe. Batching could reduce syscall overhead for many-tool iterations.
-- **Incremental classify_ns**: Instead of re-pickling the entire namespace on shadow re-seed, track which names changed and only re-pickle those.
-- **AST parse cache in StreamSegmenter**: `_drain` re-parses the same source text. Cache parse results by source hash.
-- **Skip snapshot when no cross-iteration state**: If the code doesn't read names from prior iterations (all free names are imports/builtins/pure-assigned), skip the snapshot entirely. Current filter catches most cases but misses some (e.g. names that are read-before-write in the code).
+## Explored & Discarded
+- **REPL reuse across forward()**: Changes RLM semantics (state leakage)
+- **For-loop target in pure_assigned**: Empty loops don't overwrite — test failure
+- **Batch pipe messages**: Subprocess IPC is already µs-level
+- **AST parse cache**: Each segment has unique source — no cache hits
+- **canonical_hash optimization**: Already ~1µs — not worth optimizing
+- **classify_ns caching**: Namespace is stable — re-seeding never happens in benchmark
+
+## If Starting Fresh
+- **Pre-compute snapshot at generate_action time**: Overlap snapshot with LLM generation. Complex but could hide the 1ms snapshot cost.
+- **Instrument PythonInterpreter startup**: Profile the 777ms Deno startup to find optimization opportunities in DSPy itself.
