@@ -38,7 +38,6 @@ import ast
 import atexit
 import builtins
 import inspect
-import json
 import weakref
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -364,13 +363,17 @@ def _install_claim_hooks(
         # call with tools). Since claim hooks preserve the raw tool's signature,
         # re-registration is a no-op when the tool set is stable across iterations.
         try:
-            sig_hash = hash(tuple(
-                (name, str(getattr(tools[name], "__signature__", None)))
-                for name in sorted(tools)
-            ))
+            sig_hash = hash(
+                tuple(
+                    (name, str(getattr(tools[name], "__signature__", None)))
+                    for name in sorted(tools)
+                )
+            )
         except Exception:
             sig_hash = None
-        if sig_hash is not None and sig_hash != getattr(rlm, "_spec_last_tool_sig_hash", None):
+        if sig_hash is not None and sig_hash != getattr(
+            rlm, "_spec_last_tool_sig_hash", None
+        ):
             rlm._spec_last_tool_sig_hash = sig_hash
             repl._tools_registered = False
 
@@ -446,7 +449,9 @@ def _pure_assigned_names(tree: ast.Module) -> set[str]:
     out: set[str] = set()
     for stmt in tree.body:
         if isinstance(stmt, ast.Assign):
-            value_reads = {n.id for n in ast.walk(stmt.value) if isinstance(n, ast.Name)}
+            value_reads = {
+                n.id for n in ast.walk(stmt.value) if isinstance(n, ast.Name)
+            }
             for target in stmt.targets:
                 if isinstance(target, ast.Name) and target.id not in value_reads:
                     out.add(target.id)
@@ -489,8 +494,11 @@ def _live_state_seed(
         if isinstance(node, ast.For):
             iter_node = node.iter
             non_empty = (
-                (isinstance(iter_node, (ast.List, ast.Tuple)) and len(iter_node.elts) > 0)
-                or (isinstance(iter_node, ast.Constant) and isinstance(iter_node.value, (str, bytes, list, tuple)) and len(iter_node.value) > 0)
+                isinstance(iter_node, (ast.List, ast.Tuple)) and len(iter_node.elts) > 0
+            ) or (
+                isinstance(iter_node, ast.Constant)
+                and isinstance(iter_node.value, (str, bytes, list, tuple))
+                and len(iter_node.value) > 0
             )
             if non_empty:
                 for n in ast.walk(node.target):
@@ -742,7 +750,11 @@ def _speculation_execute_code(
         if _has_speculatable(spec):
             t = None
             try:
-                seed = dict(input_args) if first_exec else _live_state_seed(repl, code, input_args, spec)
+                seed = (
+                    dict(input_args)
+                    if first_exec
+                    else _live_state_seed(repl, code, input_args, spec)
+                )
                 t = spec.session.begin_stream_turn(
                     seed,
                     shadow_builtins(dict(builtins.__dict__)),
