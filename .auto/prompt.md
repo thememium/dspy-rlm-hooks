@@ -3,7 +3,7 @@
 ## Objective
 Optimize the speculative execution engine for DSPy's RLM (Recursive Language Model) to minimize total inference overhead. The goal is to make speculation a net win — the speculated path should be FASTER than the baseline (not slower).
 
-Current state: speculation adds ~84ms overhead (388ms vs 304ms baseline). Shadow construction is2.4ms (optimized from70ms with fork), drain barrier1.4ms, claim wait273ms. Only32ms of tool latency is hidden.
+Current state: speculation adds ~85ms overhead (389ms vs 303ms baseline). Shadow construction is2.4ms (optimized from70ms with fork), drain barrier1.4ms, claim wait272ms. Only32ms of tool latency is hidden.
 
 ## Metrics
 - **Primary**: `speculated_ms` (ms, lower is better) — total wall time with speculation enabled
@@ -89,9 +89,9 @@ Current state: speculation adds ~84ms overhead (388ms vs 304ms baseline). Shadow
 
 1. **Shadow subprocess cost**: Now2.4ms with fork (was70ms with spawn). Fork is29x faster.
 
-2. **Claim wait dominance**:273ms of388ms total is waiting for speculations. This is70% of the total time.
+2. **Claim wait dominance**:272ms of389ms total is waiting for speculations. This is70% of the total time.
 
-3. **Stream window limitation**: The stream window is115ms, but tool latency is300ms. The speculation can only hide115ms of the300ms, leaving185ms to wait.
+3. **Stream window limitation**: The stream window is117ms, but tool latency is300ms. The speculation can only hide117ms of the300ms, leaving183ms to wait.
 
 4. **Segmenter fix**: The segmenter now correctly handles newlines inside strings. This enables loop unrolling for common patterns like `context.split("\n\n")`.
 
