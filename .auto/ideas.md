@@ -8,9 +8,13 @@ The segmenter treated newlines inside string literals (e.g., `"\n\n"`) as line b
 
 ## Key Finding: Claim Wait Dominance
 
-The claim wait is the dominant bottleneck (272ms,71% of total). This is the time the real execution waits for speculations to complete. The stream window is116ms, but tool latency is300ms, so speculations can only hide116ms of the300ms.
+The claim wait is the dominant bottleneck (~270ms,70% of total). This is the time the real execution waits for speculations to complete. The stream window is~115ms, but tool latency is300ms, so speculations can only hide~115ms of the300ms.
 
-**Impact**: Even with perfect speculation, the claim wait would still be184ms (300ms - 116ms). This is inherent to the design.
+**Impact**: Even with perfect speculation, the claim wait would still be~185ms (300ms - 115ms). This is inherent to the design.
+
+## Key Finding: Real API Variability
+
+The real API benchmark shows high variability (2x between fast and slow runs). This is due to LLM response time variance, not the speculation engine. The speculation engine consistently helps in the median case (~11-19% speedup), but outliers can be slower.
 
 ## Optimization Ideas (Deferred)
 
@@ -18,11 +22,11 @@ The claim wait is the dominant bottleneck (272ms,71% of total). This is the time
 
 2. **Shared memory for namespace transfer**: Use `multiprocessing.shared_memory` instead of pickle+pipe for large namespaces. This could reduce pipe communication overhead.
 
-3. **Batch pipe messages**: Accumulate multiple messages and send them in one batch to reduce per-message overhead. This could reduce the number of pipe operations.
+3. **Batch pipe messages**: Accumulate multiple messages and send them in one batch to reduce per-message overhead.
 
 4. **Speculative claim without wait**: Return immediately if speculation isn't ready, let real execution proceed and claim later. This would eliminate the claim wait but also eliminate the benefit.
 
-5. **Thread-based shadow**: Replace subprocess with thread for even faster shadow construction. Already using fork, which is2.3ms. Thread could be faster but loses process isolation.
+5. **Thread-based shadow**: Replace subprocess with thread for even faster shadow construction. Already using fork, which is~2.5ms. Thread could be faster but loses process isolation.
 
 6. **Lazy namespace classification**: Only pickle values that are actually used by the shadow, not the entire namespace. This could reduce serialization overhead for large namespaces.
 
