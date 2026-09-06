@@ -486,6 +486,48 @@ def _live_state_seed(
     requested -= pure_assigned
     if not requested:
         return seed
+    # Names that are stored ANYWHERE in the code (including loop targets,
+    # with-body assignments, etc.) will be overwritten before they're read
+    # from the REPL.  The snapshot probe would find nothing (the name
+    # doesn't exist yet or will be replaced), so skip the expensive
+    # repl.execute() round-trip entirely.
+    # BUT: only skip names that are NOT read before their first store
+    # (e.g. ``value = value + 'new'`` reads the old value first).
+    # Simple heuristic: names that are ONLY stored (never read at all)
+    # are safe to skip. Loop targets like ``for kind in [...]`` are
+    # stored AND read (inside the body), so we need a separate check.
+    # Collect loop targets where the iterable is GUARANTEED to be non-empty
+    # (literal list/tuple with elements). Empty loops (``for value in []:``)
+    # don't overwrite the variable — the old value survives.
+    loop_targets: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.For):
+            iter_node = node.iter
+            non_empty = (
+                (isinstance(iter_node, (ast.List, ast.Tuple)) and len(iter_node.elts) > 0)
+                or (isinstance(iter_node, ast.Constant) and isinstance(iter_node.value, (str, bytes, list, tuple)) and len(iter_node.value) > 0)
+            )
+            if non_empty:
+                for n in ast.walk(node.target):
+                    if isinstance(n, ast.Name):
+                        loop_targets.add(n.id)
+    # Names stored but never loaded are pure overwrites (safe to skip).
+    # AugAssign targets (``value += 'new'``) are implicitly read.
+    all_stored: set[str] = set()
+    all_reads: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            if isinstance(node.ctx, (ast.Store, ast.Del)):
+                all_stored.add(node.id)
+            elif isinstance(node.ctx, ast.Load):
+                all_reads.add(node.id)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            all_reads.add(node.target.id)  # implicitly reads old value
+    stored_not_read = (all_stored - all_reads) | loop_targets
+    remaining = requested - stored_not_read
+    if not remaining:
+        return seed
+    requested = remaining
     try:
         out = repl.execute(
             f"_spec_requested = {sorted(requested)!r}\n" + _SNAPSHOT_PROBE
