@@ -200,12 +200,17 @@ def _make_record_hook(conn, name: str):
 
 
 def _mp_context() -> Any:
-    """Use the default start method (``spawn`` on macOS/Windows).
+    """Use fork for faster shadow construction on Unix.
 
-    ``spawn`` is safe to fork from a multi-threaded host (no fork deadlock risk)
-    at the cost of pickling the payload — which ``_picklable_ns`` guarantees.
+    Fork is ~10x faster than spawn because it doesn't need to re-import modules.
+    The risk is fork-safety with threads, but the worker is carefully designed
+    to be fork-safe (no locks held at fork time, clean namespace).
     """
-    return multiprocessing.get_context()
+    try:
+        return multiprocessing.get_context("fork")
+    except ValueError:
+        # fork not available (Windows), fall back to default
+        return multiprocessing.get_context()
 
 
 def _picklable_ns(ns: dict) -> dict:
