@@ -346,7 +346,7 @@ dicts, no flags:
 
 ```python
 import dspy
-from dspy_rlm_hooks import enable_rlm_speculation, speculative
+from dspy_rlm_hooks import enable_rlm_speculation, SpecTool
 
 def lookup_price(symbol: str) -> float:
     """Read-only price lookup."""
@@ -354,7 +354,7 @@ def lookup_price(symbol: str) -> float:
 
 rlm = dspy.RLM(..., tools=[lookup_price])
 
-enable_rlm_speculation(rlm, tools=[speculative(lookup_price)])
+enable_rlm_speculation(rlm, tools=[SpecTool(lookup_price)])
 
 result = rlm(question="What is the current price of AAPL?")
 ```
@@ -362,12 +362,14 @@ result = rlm(question="What is the current price of AAPL?")
 - The tool must be **pure** (no observable side effects): speculated calls run
   early and may run more than once.
 - The tool name defaults to the function's `__name__` and must match the name
-  the tool is registered under in the REPL. Pass `speculative(fn, name="...")`
+  the tool is registered under in the REPL. Pass `SpecTool(fn, name="...")`
   to override it.
 - Wrapped tools are always speculated. Unwrapped entries (plain callables,
   `dspy.Tool` objects, or `(callable, policy_kwargs)` pairs) are only speculated
   when `speculate_user_tools=True` — the same rule as the `{name: tool}` dict
   form, which still works.
+- `SpecTool` and `Spec` are aliases for `speculative` — use whichever reads
+  best: `tools=[SpecTool(lookup_price)]`.
 
 Per-tool hints ride on the wrapper:
 
@@ -375,7 +377,7 @@ Per-tool hints ride on the wrapper:
 enable_rlm_speculation(
     rlm,
     tools=[
-        speculative(lookup_price, deterministic=True, latency_hint_ms=250),
+        SpecTool(lookup_price, deterministic=True, latency_hint_ms=250),
     ],
 )
 ```
