@@ -448,3 +448,7 @@ def speculative(
         deterministic=deterministic,
         latency_hint_ms=latency_hint_ms,
     )
+
+
+SpecTool = speculative
+Spec = speculative
