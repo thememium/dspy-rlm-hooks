@@ -291,12 +291,21 @@ def test_serve_loop_teardown_on_closed_loop():
 
     loop = asyncio.new_event_loop()
     loop.close()  # run_forever raises immediately -> finally runs
-    t = threading.Thread(target=_serve_loop, args=(loop,))
+    errors: list[Exception] = []
+
+    def serve() -> None:
+        try:
+            _serve_loop(loop)
+        except RuntimeError as exc:
+            errors.append(exc)
+
+    t = threading.Thread(target=serve)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         t.start()
         t.join(timeout=2)
     assert not t.is_alive()
+    assert errors, "expected RuntimeError from run_forever on a closed loop"
 
 
 # -- StreamTurn.feed peek path (lines 309-310) --------------------------------
