@@ -54,10 +54,6 @@ dev = [
   "usechange>=0.1.44",
 ]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["dspy_rlm_hooks*"]
-
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
