@@ -341,7 +341,7 @@ result = rlm(question="...")
 ### Speculating Your Own Tools
 
 By default only the built-in sub-LLM tools are speculated. To speculate one of
-your own tools, wrap it with `speculative()` and pass it in a list — no name
+your own tools, wrap it with `SpecTool` and pass it in a list — no name
 dicts, no flags:
 
 ```python
