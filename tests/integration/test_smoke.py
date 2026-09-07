@@ -61,21 +61,11 @@ def assert_python_import() -> None:
 def assert_public_api() -> None:
     import dspy_rlm_hooks
 
-    for name in [
-        "PreIterationHook",
-        "PreExecutionHook",
-        "PostExecutionHook",
-        "PostIterationHook",
-        "PreIterationOutput",
-        "PreExecutionOutput",
-        "PostExecutionOutput",
-        "PostIterationOutput",
-        "RLMHook",
-        "enable_rlm_hooks",
-        "disable_rlm_hooks",
-    ]:
-        if not hasattr(dspy_rlm_hooks, name):
-            raise AssertionError(f"Missing public API: {name}")
+    missing = [
+        name for name in dspy_rlm_hooks.__all__ if not hasattr(dspy_rlm_hooks, name)
+    ]
+    if missing:
+        raise AssertionError(f"Missing public API: {', '.join(missing)}")
 
     try:
         importlib.metadata.version("dspy-rlm-hooks")

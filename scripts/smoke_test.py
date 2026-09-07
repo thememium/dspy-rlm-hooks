@@ -20,22 +20,6 @@ import dspy_rlm_hooks
 PYPROJECT = pathlib.Path(__file__).parent.parent / "pyproject.toml"
 PYPROJECT_VERSION = tomllib.loads(PYPROJECT.read_text())["project"]["version"]
 
-PUBLIC_API = [
-    "PreIterationHook",
-    "PreExecutionHook",
-    "PostExecutionHook",
-    "PostIterationHook",
-    "PreIterationOutput",
-    "PreExecutionOutput",
-    "PostExecutionOutput",
-    "PostIterationOutput",
-    "RLMHook",
-    "enable_rlm_hooks",
-    "disable_rlm_hooks",
-    "enable_rlm_speculation",
-    "disable_rlm_speculation",
-]
-
 
 def main() -> None:
     version = dspy_rlm_hooks.__version__
@@ -46,11 +30,16 @@ def main() -> None:
         )
     importlib.metadata.version("dspy-rlm-hooks")
 
-    missing = [name for name in PUBLIC_API if not hasattr(dspy_rlm_hooks, name)]
+    missing = [
+        name for name in dspy_rlm_hooks.__all__ if not hasattr(dspy_rlm_hooks, name)
+    ]
     if missing:
         raise AssertionError(f"Missing public API: {', '.join(missing)}")
 
-    print(f"Smoke test OK: dspy-rlm-hooks {version}")
+    print(
+        f"Smoke test OK: dspy-rlm-hooks {version} "
+        f"({len(dspy_rlm_hooks.__all__)} exports)"
+    )
 
 
 if __name__ == "__main__":
