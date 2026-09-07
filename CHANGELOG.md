@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.1.13 (2026-09-07)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.12...v0.1.13)
+
+### 🚀 Enhancements
+
+- **dspy_rlm_hooks**: expose Spec and SpecTool as public API ([c3b7add](https://github.com/thememium/dspy-rlm-hooks/commit/c3b7add770ca2899fafd1730aa35ba83301db6ce))
+- **speculation**: add SpeculativeToolRequest and wrapper for user tools ([7ab24ac](https://github.com/thememium/dspy-rlm-hooks/commit/7ab24ac18cd81392d313361835d5a1e9f27778ed))
+
+### 💅 Refactors
+
+- **speculation**: clean up duplicate imports and simplify import statements ([2c257cf](https://github.com/thememium/dspy-rlm-hooks/commit/2c257cf140e3e16f5d7432d7c06da12447cc4432))
+
+### 📖 Documentation
+
+- **readme**: replace speculative() usage with SpecTool in usage section ([f0f6caf](https://github.com/thememium/dspy-rlm-hooks/commit/f0f6cafc75d593170f1bbfaf1b71723b9bc1fffd))
+- **README**: update speculation API examples and clarify SpecTool usage ([8391e7f](https://github.com/thememium/dspy-rlm-hooks/commit/8391e7f3a7ef632edad62bb2783ee2d8fce2f5d6))
+
+### 🏡 Chore
+
+- Refactor and enhance speculation and benchmark modules with tests (#10) (#10) ([c8427ea](https://github.com/thememium/dspy-rlm-hooks/commit/c8427eabbeee422254054024bc1f84f8a936f550))
+
+### ✅ Tests
+
+- **speculation**: add tuple pair and nameless tool tests ([34d96d3](https://github.com/thememium/dspy-rlm-hooks/commit/34d96d3227d656734e72e979ceb21c7c5ca4df3c))
+- **speculation**: add alias tests for Spec and SpecTool ([a1897e9](https://github.com/thememium/dspy-rlm-hooks/commit/a1897e924a88a8c4eb051e17010b46bb2a176866))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
 ## v0.1.12 (2026-09-06)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.11...v0.1.12)
