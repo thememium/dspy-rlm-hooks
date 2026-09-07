@@ -643,6 +643,35 @@ def test_list_form_unresolvable_name_raises():
         enable_rlm_speculation(MagicMock(), tools=[_Callable()])
 
 
+def test_list_form_nameless_tool_object_raises():
+    from dspy_rlm_hooks.speculation.integration.api import _normalize_tool_input
+
+    class _Nameless:
+        def __init__(self):
+            self.func = lambda x: x
+
+    with pytest.raises(ValueError, match="cannot derive a tool name"):
+        _normalize_tool_input([_Nameless()])
+
+
+def test_list_form_tuple_pair(mock_rlm):
+    """(fn, policy_kwargs) pairs work in list form, like the dict form."""
+
+    def lookup_price(symbol):
+        return 1.0
+
+    mock_rlm.max_llm_calls = 50
+    enable_rlm_speculation(
+        mock_rlm,
+        tools=[(lookup_price, {"deterministic": True})],
+        speculate_user_tools=True,
+    )
+    tool_spec = mock_rlm._speculator.registry.get("lookup_price")
+    assert tool_spec is not None
+    assert tool_spec.speculatable is True
+    assert tool_spec.deterministic is True
+
+
 def test_list_form_duplicate_name_with_different_fn_raises():
     from dspy_rlm_hooks.speculation.integration.api import _normalize_tool_input
 
