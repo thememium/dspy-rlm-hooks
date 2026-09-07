@@ -286,6 +286,19 @@ def test_speculative_request_is_frozen():
         setattr(req, "deterministic", True)
 
 
+def test_speculative_aliases():
+    from dspy_rlm_hooks import Spec, SpecTool
+
+    assert SpecTool is speculative
+    assert Spec is speculative
+
+    def my_tool(x):
+        return x
+
+    assert SpecTool(my_tool) == speculative(my_tool)
+    assert Spec(my_tool) == speculative(my_tool)
+
+
 # -- SpeculativeTool ---------------------------------------------------------
 
 
