@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.1.14 (2026-09-07)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.13...v0.1.14)
+
+### 💅 Refactors
+
+- **smoke_test**: use __all__ for public API validation ([ffc21ca](https://github.com/thememium/dspy-rlm-hooks/commit/ffc21cac7c0947706cd789fbec4d8b3eb51afd15))
+
+### 🏡 Chore
+
+- **ci**: update CI to use Python 3.12 and add smoke test script ([aaa54e6](https://github.com/thememium/dspy-rlm-hooks/commit/aaa54e6b1b92d7dc64937676e2ddccee480aeb1f))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
 ## v0.1.13 (2026-09-07)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.12...v0.1.13)
