@@ -230,12 +230,20 @@ $ uv run poe release
 ```
 ├── src/dspy_rlm_hooks/          # Source code
 │   ├── __init__.py              # Main entry point and public API
-│   ├── patcher.py               # Core monkey-patching logic for RLM hooks
-│   ├── predict_rlm_compat.py    # PredictRLM compatibility layer
-│   ├── py.typed                 # PEP 561 marker for type checkers
-│   ├── types.py                 # Dataclasses and type definitions for hook outputs
-│   └── utils.py                 # Utility functions
-├── tests/                       # Test files
+│   ├── core/                    # Hook lifecycle core
+│   │   ├── patcher.py           # Core monkey-patching logic for RLM hooks
+│   │   ├── predict_rlm_compat.py # PredictRLM compatibility layer
+│   │   ├── tracing.py           # Optional MLflow tracing wrappers
+│   │   ├── types.py             # Dataclasses and type definitions for hook outputs
+│   │   └── utils.py             # Utility functions
+│   ├── speculation/             # Speculative tool calling (sPTC)
+│   │   ├── integration/         # enable_rlm_speculation wiring
+│   │   ├── shadow/              # Shadow pre-pass runner and worker
+│   │   ├── streaming/           # Stream segmentation and planning
+│   │   └── ...                  # config, budget, guards, tool, store, hooks, session, speculator
+│   ├── benchmark/               # Deterministic A/B benchmark harness
+│   └── py.typed                 # PEP 561 marker for type checkers
+├── tests/                       # Test files (mirrors src/ layout)
 └── examples/                    # Runnable example scripts
 ```
 
@@ -258,7 +266,7 @@ from typing import TYPE_CHECKING, Any
 import dspy
 from dspy.primitives.repl_types import REPLHistory
 
-from dspy_rlm_hooks.types import PreIterationOutput
+from dspy_rlm_hooks.core.types import PreIterationOutput
 
 if TYPE_CHECKING:
     from dspy.clients.base_lm import BaseLM
