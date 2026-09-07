@@ -29,6 +29,7 @@ from dspy_rlm_hooks.speculation.shadow import (
     shadow_builtins,
     snapshot_ns,
 )
+from dspy_rlm_hooks.speculation.speculator import Speculator
 from dspy_rlm_hooks.speculation.store import SpecStore, Speculation
 from dspy_rlm_hooks.speculation.streaming import (
     MAX_UNROLL,
@@ -51,7 +52,6 @@ from dspy_rlm_hooks.speculation.tool import (
     spec_key,
     speculate,
 )
-from dspy_rlm_hooks.speculator import Speculator
 
 __all__ = [
     "SpeculationConfig",

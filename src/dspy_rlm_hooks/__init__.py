@@ -44,21 +44,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dspy_rlm_hooks.patcher import disable_rlm_hooks
-from dspy_rlm_hooks.patcher import enable_rlm_hooks as _enable_rlm_hooks_without_tracing
-from dspy_rlm_hooks.speculation.config import SpeculationConfig, SpeculationPolicy
-from dspy_rlm_hooks.speculation.session import SpecSession, StreamTurn
-from dspy_rlm_hooks.speculation.tool import speculate
-from dspy_rlm_hooks.speculation_integration import (
-    disable_rlm_speculation,
-    enable_rlm_speculation,
-)
-from dspy_rlm_hooks.speculator import Speculator
-from dspy_rlm_hooks.tracing import (
-    _is_mlflow_tracing_available,
-    enable_rlm_hooks_with_tracing,
-)
-from dspy_rlm_hooks.types import (
+from dspy_rlm_hooks.core import (
     PostExecutionHook,
     PostExecutionOutput,
     PostIterationHook,
@@ -68,7 +54,19 @@ from dspy_rlm_hooks.types import (
     PreIterationHook,
     PreIterationOutput,
     RLMHook,
+    disable_rlm_hooks,
 )
+from dspy_rlm_hooks.core import enable_rlm_hooks as _enable_rlm_hooks_without_tracing
+from dspy_rlm_hooks.core import enable_rlm_hooks_with_tracing
+from dspy_rlm_hooks.core.tracing import _is_mlflow_tracing_available
+from dspy_rlm_hooks.speculation.config import SpeculationConfig, SpeculationPolicy
+from dspy_rlm_hooks.speculation.integration import (
+    disable_rlm_speculation,
+    enable_rlm_speculation,
+)
+from dspy_rlm_hooks.speculation.session import SpecSession, StreamTurn
+from dspy_rlm_hooks.speculation.speculator import Speculator
+from dspy_rlm_hooks.speculation.tool import speculate
 
 
 def enable_rlm_hooks(
@@ -131,7 +129,7 @@ __all__ = [
 
 # PredictRLM compatibility — available when predict-rlm is installed
 try:
-    from dspy_rlm_hooks.predict_rlm_compat import _is_predict_rlm
+    from dspy_rlm_hooks.core.predict_rlm_compat import _is_predict_rlm
 
     __all__ = [*__all__, "_is_predict_rlm"]
 except ImportError:
