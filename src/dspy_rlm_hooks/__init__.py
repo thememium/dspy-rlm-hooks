@@ -44,15 +44,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dspy_rlm_hooks.core.patcher import disable_rlm_hooks
-from dspy_rlm_hooks.core.patcher import (
-    enable_rlm_hooks as _enable_rlm_hooks_without_tracing,
-)
-from dspy_rlm_hooks.core.tracing import (
-    _is_mlflow_tracing_available,
-    enable_rlm_hooks_with_tracing,
-)
-from dspy_rlm_hooks.core.types import (
+from dspy_rlm_hooks.core import (
     PostExecutionHook,
     PostExecutionOutput,
     PostIterationHook,
@@ -62,7 +54,11 @@ from dspy_rlm_hooks.core.types import (
     PreIterationHook,
     PreIterationOutput,
     RLMHook,
+    disable_rlm_hooks,
 )
+from dspy_rlm_hooks.core import enable_rlm_hooks as _enable_rlm_hooks_without_tracing
+from dspy_rlm_hooks.core import enable_rlm_hooks_with_tracing
+from dspy_rlm_hooks.core.tracing import _is_mlflow_tracing_available
 from dspy_rlm_hooks.speculation.config import SpeculationConfig, SpeculationPolicy
 from dspy_rlm_hooks.speculation.integration import (
     disable_rlm_speculation,
