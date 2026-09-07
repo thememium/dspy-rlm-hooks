@@ -217,3 +217,12 @@ def test_benchmark_sums_repeated_timing_keys_across_iterations():
 
     # Then their critical path contributions are added, not overwritten.
     assert result["tool_critical_ms"]["median"] == 18
+
+
+def test_benchmark_main_module_imports_cleanly():
+    # Given ``python -m dspy_rlm_hooks.benchmark`` executes __main__.py,
+    # importing the module must NOT run the CLI (SystemExit lives behind
+    # the __main__ guard) but must bind the same ``main`` the package exports.
+    import dspy_rlm_hooks.benchmark.__main__ as entry
+
+    assert entry.main is B.main

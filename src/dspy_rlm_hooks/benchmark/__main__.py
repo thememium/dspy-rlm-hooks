@@ -2,4 +2,5 @@
 
 from dspy_rlm_hooks.benchmark import main
 
-raise SystemExit(main())  # pragma: no cover
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

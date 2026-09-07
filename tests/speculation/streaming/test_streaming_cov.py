@@ -35,7 +35,7 @@ def test_plan_peeks_handles_unparseable_repaired_tail():
     defensive ``except SyntaxError`` branch is exercised by forcing it to
     return garbage."""
     with patch(
-        "dspy_rlm_hooks.speculation.streaming.repair_tail",
+        "dspy_rlm_hooks.speculation.streaming.planning.repair_tail",
         return_value="if :",
     ):
         assert plan_peeks("anything", SPEC, {}) == []
