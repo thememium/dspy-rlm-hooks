@@ -53,6 +53,7 @@ from dspy_rlm_hooks.speculation.integration.streaming_turn import (
     _StreamingGenerateAction,
 )
 from dspy_rlm_hooks.speculation.speculator import Speculator
+from dspy_rlm_hooks.speculation.tool import SpeculativeToolRequest
 
 if TYPE_CHECKING:
     # Kept off the module import path: importing this module must stay cheap
@@ -60,10 +61,68 @@ if TYPE_CHECKING:
     pass
 
 
+def _default_tool_name(fn: Any) -> str:
+    name = getattr(fn, "__name__", None) or getattr(fn, "name", None)
+    if not name:
+        raise ValueError(
+            "cannot derive a tool name from "
+            f"{type(fn).__name__}; pass speculative(fn, name=...) or use the "
+            "dict form of enable_rlm_speculation(tools=...)"
+        )
+    return name
+
+
+def _normalize_tool_input(tools: Any) -> dict[str, Any]:
+    """Accept the legacy ``{name: tool}`` dict or a list of tools.
+
+    List items: ``speculative()``-wrapped tools, plain callables, dspy ``Tool``
+    objects, or ``(callable, policy_kwargs)`` pairs. Names are derived from
+    ``fn.__name__`` (or the Tool's ``name``); duplicates collapse to a single
+    entry only when they resolve to the same tool object.
+    """
+    if tools is None:
+        return {}
+    if isinstance(tools, dict):
+        return dict(tools)
+    if isinstance(tools, (list, tuple)):
+        normalized: dict[str, Any] = {}
+        for item in tools:
+            if isinstance(item, SpeculativeToolRequest):
+                name = item.name or _default_tool_name(item.fn)
+                fn = item.fn
+            elif isinstance(item, tuple) and len(item) == 2 and callable(item[0]):
+                fn, _ = item
+                name = _default_tool_name(fn)
+            elif callable(item):
+                fn = item
+                name = _default_tool_name(fn)
+            else:
+                fn = getattr(item, "func", item)
+                name = getattr(item, "name", None)
+                if not name:
+                    raise ValueError(
+                        f"cannot derive a tool name from {type(item).__name__}; "
+                        "wrap it with speculative(fn, name=...) or use the "
+                        "dict form of enable_rlm_speculation(tools=...)"
+                    )
+            existing = normalized.get(name)
+            if existing is not None and (getattr(existing, "fn", existing) is not fn):
+                raise ValueError(
+                    f"duplicate tool name {name!r} in tools list with "
+                    "different implementations"
+                )
+            normalized[name] = item
+        return normalized
+    raise TypeError(
+        "tools must be a dict {name: tool}, a list of tools, or None; "
+        f"got {type(tools).__name__}"
+    )
+
+
 def enable_rlm_speculation(
     rlm: Any,
     *,
-    tools: Any = None,
+    tools: dict[str, Any] | list[Any] | None = None,
     max_inflight: int = 8,
     max_dispatches_per_turn: int = 2048,
     speculate_llm_query: bool = True,
@@ -96,8 +155,13 @@ def enable_rlm_speculation(
     Args:
         rlm: The RLM instance to patch (must expose the internal API validated
             by :func:`~dspy_rlm_hooks.core.patcher._validate_rlm`).
-        tools: Optional mapping of user tool name -> callable (or ``Tool``) to
-            classify. Only speculated when ``speculate_user_tools=True``.
+        tools: User tools to classify — either a ``{name: tool}`` dict or a
+            list of tools (``speculative()``-wrapped tools, plain callables,
+            ``dspy.Tool`` objects, or ``(callable, policy_kwargs)`` pairs).
+            Wrapped tools are ALWAYS speculated; unwrapped entries only when
+            ``speculate_user_tools=True``. Names default to the function's
+            ``__name__`` and must match the name the tool is registered under
+            in the REPL.
         max_inflight: Max speculative executions in flight at once.
         max_dispatches_per_turn: Hard cap on speculative dispatches per turn.
         speculate_llm_query: Speculate the built-in ``llm_query`` tool.
@@ -115,6 +179,7 @@ def enable_rlm_speculation(
     """
     _validate_rlm(rlm)
 
+    tools = _normalize_tool_input(tools)
     config = SpeculationConfig(
         enabled=True,
         max_inflight=max_inflight,

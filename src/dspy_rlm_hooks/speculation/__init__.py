@@ -45,12 +45,14 @@ from dspy_rlm_hooks.speculation.tool import (
     NonSpeculated,
     SpecKey,
     SpeculativeTool,
+    SpeculativeToolRequest,
     SpecValue,
     ToolSpec,
     canonical_hash,
     contains_nonspec,
     spec_key,
     speculate,
+    speculative,
 )
 
 __all__ = [
@@ -58,6 +60,7 @@ __all__ = [
     "SpeculationPolicy",
     "ToolSpec",
     "SpeculativeTool",
+    "SpeculativeToolRequest",
     "SpecKey",
     "SpecValue",
     "NonSpeculated",
@@ -68,6 +71,7 @@ __all__ = [
     "spec_key",
     "contains_nonspec",
     "speculate",
+    "speculative",
     "Segment",
     "StreamSegmenter",
     "Plan",

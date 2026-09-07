@@ -399,3 +399,52 @@ def speculate(
         latency_hint_ms=policy.latency_hint_ms,
         gate_fn=policy.gate,
     )
+
+
+@dataclass(frozen=True)
+class SpeculativeToolRequest:
+    """Marks a tool for speculative execution when passed to
+    :func:`~dspy_rlm_hooks.speculation.integration.api.enable_rlm_speculation`
+    via the ``tools`` list.
+
+    Attributes:
+        fn: The tool implementation.
+        name: Optional explicit tool name. Defaults to ``fn.__name__`` (or the
+            tool's ``name`` attribute for ``dspy.Tool`` objects). The resolved
+            name must match the name the tool is registered under in the REPL.
+        deterministic: Identical inputs always produce identical output.
+        latency_hint_ms: Expected latency, used by the budget/scheduler.
+    """
+
+    fn: Callable[..., Any]
+    name: str | None = None
+    deterministic: bool = False
+    latency_hint_ms: float = 1000.0
+
+
+def speculative(
+    fn: Callable[..., Any],
+    *,
+    name: str | None = None,
+    deterministic: bool = False,
+    latency_hint_ms: float = 1000.0,
+) -> SpeculativeToolRequest:
+    """Mark a user tool for speculative execution.
+
+    Wrapping a tool with :func:`speculative` is the per-tool opt-in to
+    speculative execution: wrapped tools passed to
+    :func:`~dspy_rlm_hooks.speculation.integration.api.enable_rlm_speculation`
+    via ``tools=[...]`` are always speculated, without setting
+    ``speculate_user_tools=True``. The tool must be pure — no observable side
+    effects — because speculated calls run early and may run more than once.
+
+    Example::
+
+        enable_rlm_speculation(rlm, tools=[speculative(lookup_price)])
+    """
+    return SpeculativeToolRequest(
+        fn=fn,
+        name=name,
+        deterministic=deterministic,
+        latency_hint_ms=latency_hint_ms,
+    )

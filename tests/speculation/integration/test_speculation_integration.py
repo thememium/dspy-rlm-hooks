@@ -22,7 +22,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dspy_rlm_hooks import PostExecutionOutput, PreExecutionOutput, enable_rlm_hooks
+from dspy_rlm_hooks import (
+    PostExecutionOutput,
+    PreExecutionOutput,
+    enable_rlm_hooks,
+    speculative,
+)
 from dspy_rlm_hooks.speculation.config import SpeculationConfig
 from dspy_rlm_hooks.speculation.integration import (
     _install_claim_hooks,
@@ -524,6 +529,169 @@ def test_register_classifications_user_tool_object(mock_rlm, mock_repl):
     tool_spec = mock_rlm._speculator.registry.get("lookup_price")
     assert tool_spec is not None
     assert tool_spec.fn is lookup_price  # unwrapped from the Tool object
+
+
+# -- list-form tools: speculative() wrapper -----------------------------------
+
+
+def test_list_form_wrapped_tool_is_speculatable_without_flag(mock_rlm):
+    """tools=[speculative(fn)] opts the tool in; no speculate_user_tools needed."""
+
+    def lookup_price(symbol):
+        return 1.0
+
+    mock_rlm.max_llm_calls = 50
+    enable_rlm_speculation(mock_rlm, tools=[speculative(lookup_price)])
+    tool_spec = mock_rlm._speculator.registry.get("lookup_price")
+    assert tool_spec is not None
+    assert tool_spec.speculatable is True
+    assert tool_spec.pure is True
+    assert tool_spec.fn is lookup_price
+    assert mock_rlm._speculation_config.speculate_user_tools is False
+
+
+def test_list_form_name_and_policy_overrides(mock_rlm):
+    def lookup_price(symbol):
+        return 1.0
+
+    mock_rlm.max_llm_calls = 50
+    enable_rlm_speculation(
+        mock_rlm,
+        tools=[
+            speculative(
+                lookup_price,
+                name="px",
+                deterministic=True,
+                latency_hint_ms=250.0,
+            )
+        ],
+    )
+    tool_spec = mock_rlm._speculator.registry.get("px")
+    assert tool_spec is not None
+    assert tool_spec.speculatable is True
+    assert tool_spec.deterministic is True
+    assert tool_spec.latency_hint_ms == 250.0
+
+
+def test_list_form_async_tool(mock_rlm):
+    async def fetch(x):
+        return x
+
+    mock_rlm.max_llm_calls = 50
+    enable_rlm_speculation(mock_rlm, tools=[speculative(fetch)])
+    tool_spec = mock_rlm._speculator.registry.get("fetch")
+    assert tool_spec is not None
+    assert tool_spec.is_async is True
+    assert tool_spec.speculatable is True
+
+
+def test_list_form_mixed_wrapped_and_plain_respects_flag(mock_rlm):
+    """Wrapped tools are always speculated; plain list entries follow the flag."""
+
+    def marked(x):
+        return x
+
+    def unmarked(x):
+        return x
+
+    mock_rlm.max_llm_calls = 50
+    enable_rlm_speculation(
+        mock_rlm, tools=[speculative(marked), unmarked], speculate_user_tools=False
+    )
+    registry = mock_rlm._speculator.registry
+    assert registry.get("marked").speculatable is True
+    assert registry.get("unmarked").speculatable is False
+
+    mock_rlm2 = MagicMock()
+    mock_rlm2.max_llm_calls = 50
+    enable_rlm_speculation(
+        mock_rlm2, tools=[speculative(marked), unmarked], speculate_user_tools=True
+    )
+    registry2 = mock_rlm2._speculator.registry
+    assert registry2.get("marked").speculatable is True
+    assert registry2.get("unmarked").speculatable is True
+
+
+def test_list_form_tool_object_uses_name_attr(mock_rlm):
+    from dspy_rlm_hooks.speculation.integration.api import _normalize_tool_input
+
+    class _Tool:
+        name = "custom_name"
+
+        def __init__(self, fn):
+            self.func = fn
+
+    def lookup_price(symbol):
+        return 1.0
+
+    normalized = _normalize_tool_input([_Tool(lookup_price)])
+    assert normalized == {"custom_name": normalized["custom_name"]}
+
+    mock_rlm.max_llm_calls = 50
+    enable_rlm_speculation(
+        mock_rlm, tools=[_Tool(lookup_price)], speculate_user_tools=True
+    )
+    assert mock_rlm._speculator.registry.get("custom_name") is not None
+
+
+def test_list_form_unresolvable_name_raises():
+    class _Callable:
+        def __call__(self, x):
+            return x
+
+    with pytest.raises(ValueError, match="cannot derive a tool name"):
+        enable_rlm_speculation(MagicMock(), tools=[_Callable()])
+
+
+def test_list_form_duplicate_name_with_different_fn_raises():
+    from dspy_rlm_hooks.speculation.integration.api import _normalize_tool_input
+
+    def lookup_price(symbol):
+        return 1.0
+
+    def other(symbol):
+        return 2.0
+
+    with pytest.raises(ValueError, match="duplicate tool name"):
+        _normalize_tool_input(
+            [speculative(lookup_price), speculative(other, name="lookup_price")]
+        )
+
+
+def test_list_form_duplicate_name_with_same_fn_is_idempotent():
+    from dspy_rlm_hooks.speculation.integration.api import _normalize_tool_input
+
+    def lookup_price(symbol):
+        return 1.0
+
+    normalized = _normalize_tool_input(
+        [speculative(lookup_price), speculative(lookup_price)]
+    )
+    assert list(normalized) == ["lookup_price"]
+
+
+def test_list_form_bad_input_type_raises():
+    from dspy_rlm_hooks.speculation.integration.api import _normalize_tool_input
+
+    with pytest.raises(TypeError, match="tools must be a dict"):
+        _normalize_tool_input("not-a-tool-list")
+
+
+def test_list_form_wrapped_tool_end_to_end(mock_rlm, mock_repl):
+    """A wrapped tool registered in repl.tools is claimed through speculation."""
+
+    def lookup_price(symbol):
+        return 1.0
+
+    mock_rlm.max_llm_calls = 50
+    mock_repl.tools = {"llm_query": lambda p: p, "lookup_price": lookup_price}
+    mock_repl.execute = _make_execute(mock_repl.tools)
+
+    enable_rlm_speculation(mock_rlm, tools=[speculative(lookup_price)])
+    _sync_registry_fns(mock_rlm._speculator, mock_repl)
+    tool_spec = mock_rlm._speculator.registry.get("lookup_price")
+    assert tool_spec.fn is lookup_price
+    assert tool_spec.speculatable is True
 
 
 def test_sync_registry_fns_no_tools(mock_rlm, mock_repl):

@@ -66,7 +66,7 @@ from dspy_rlm_hooks.speculation.integration import (
 )
 from dspy_rlm_hooks.speculation.session import SpecSession, StreamTurn
 from dspy_rlm_hooks.speculation.speculator import Speculator
-from dspy_rlm_hooks.speculation.tool import speculate
+from dspy_rlm_hooks.speculation.tool import speculate, speculative
 
 
 def enable_rlm_hooks(
@@ -122,6 +122,7 @@ __all__ = [
     "SpeculationConfig",
     "SpeculationPolicy",
     "speculate",
+    "speculative",
     "Speculator",
     "SpecSession",
     "StreamTurn",

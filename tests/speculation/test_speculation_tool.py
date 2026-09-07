@@ -12,12 +12,14 @@ from dspy_rlm_hooks.speculation import (
     SpeculationConfig,
     SpeculationPolicy,
     SpeculativeTool,
+    SpeculativeToolRequest,
     SpecValue,
     ToolSpec,
     canonical_hash,
     contains_nonspec,
     spec_key,
     speculate,
+    speculative,
 )
 
 # -- SpeculationConfig defaults ----------------------------------------------
@@ -250,6 +252,38 @@ def test_spec_value_await():
 
 async def _await_it(sv):
     return await sv
+
+
+# -- speculative() wrapper ----------------------------------------------------
+
+
+def test_speculative_wraps_fn_with_defaults():
+    def my_tool(x):
+        return x
+
+    req = speculative(my_tool)
+    assert isinstance(req, SpeculativeToolRequest)
+    assert req.fn is my_tool
+    assert req.name is None
+    assert req.deterministic is False
+    assert req.latency_hint_ms == 1000.0
+
+
+def test_speculative_policy_fields():
+    def my_tool(x):
+        return x
+
+    req = speculative(my_tool, deterministic=True, latency_hint_ms=250.0)
+    assert req.deterministic is True
+    assert req.latency_hint_ms == 250.0
+
+
+def test_speculative_request_is_frozen():
+    import dataclasses
+
+    req = speculative(lambda x: x)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(req, "deterministic", True)
 
 
 # -- SpeculativeTool ---------------------------------------------------------

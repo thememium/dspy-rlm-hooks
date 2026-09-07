@@ -338,31 +338,47 @@ enable_rlm_speculation(rlm)
 result = rlm(question="...")
 ```
 
-### Classification API
+### Speculating Your Own Tools
 
-By default only the built-in LLM tools are speculated. To speculate a read-only
-user tool, mark it with `speculate()` and pass it through the `tools` mapping
-with `speculate_user_tools=True`:
+By default only the built-in sub-LLM tools are speculated. To speculate one of
+your own tools, wrap it with `speculative()` and pass it in a list — no name
+dicts, no flags:
 
 ```python
-from dspy_rlm_hooks import enable_rlm_speculation, speculate
+import dspy
+from dspy_rlm_hooks import enable_rlm_speculation, speculative
 
 def lookup_price(symbol: str) -> float:
+    """Read-only price lookup."""
     ...
 
-speculate(lookup_price, speculatable=True, pure=True)
+rlm = dspy.RLM(..., tools=[lookup_price])
 
-enable_rlm_speculation(
-    rlm,
-    tools={"lookup_price": lookup_price},
-    speculate_user_tools=True,
-)
+enable_rlm_speculation(rlm, tools=[speculative(lookup_price)])
+
+result = rlm(question="What is the current price of AAPL?")
 ```
 
-`speculate()` folds a `SpeculationPolicy` into the tool's classification.
-`speculatable=True` requires `pure=True`: a tool with observable side effects
-must never run early. `SpeculationPolicy` also carries `deterministic`,
-`latency_hint_ms`, and an optional per-call `gate` predicate.
+- The tool must be **pure** (no observable side effects): speculated calls run
+  early and may run more than once.
+- The tool name defaults to the function's `__name__` and must match the name
+  the tool is registered under in the REPL. Pass `speculative(fn, name="...")`
+  to override it.
+- Wrapped tools are always speculated. Unwrapped entries (plain callables,
+  `dspy.Tool` objects, or `(callable, policy_kwargs)` pairs) are only speculated
+  when `speculate_user_tools=True` — the same rule as the `{name: tool}` dict
+  form, which still works.
+
+Per-tool hints ride on the wrapper:
+
+```python
+enable_rlm_speculation(
+    rlm,
+    tools=[
+        speculative(lookup_price, deterministic=True, latency_hint_ms=250),
+    ],
+)
+```
 
 ### Budget and Timeout
 

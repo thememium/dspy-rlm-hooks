@@ -18,6 +18,7 @@ from typing import Any
 from dspy_rlm_hooks.speculation.config import SpeculationConfig
 from dspy_rlm_hooks.speculation.guards import fully_raw
 from dspy_rlm_hooks.speculation.speculator import Speculator
+from dspy_rlm_hooks.speculation.tool import SpeculativeToolRequest
 
 
 def _prediction_type() -> type:
@@ -161,20 +162,31 @@ def _register_classifications(
     if tools:
         for name, tool in tools.items():
             # Accepted forms: a plain callable, a dspy ``Tool`` (uses ``.func``),
-            # or a ``(callable, policy_kwargs)`` pair for per-tool overrides.
-            policy_kwargs: dict[str, Any] = {}
-            if isinstance(tool, tuple) and len(tool) == 2 and callable(tool[0]):
-                fn, policy_kwargs = tool
-                policy_kwargs = dict(policy_kwargs or {})
+            # a ``(callable, policy_kwargs)`` pair for per-tool overrides, or a
+            # ``SpeculativeToolRequest`` (always speculatable, regardless of the
+            # master switch).
+            if isinstance(tool, SpeculativeToolRequest):
+                fn = tool.fn
+                speculatable = pure = True
+                deterministic = tool.deterministic
+                latency_hint_ms = tool.latency_hint_ms
             else:
-                fn = getattr(tool, "func", tool)
+                policy_kwargs: dict[str, Any] = {}
+                if isinstance(tool, tuple) and len(tool) == 2 and callable(tool[0]):
+                    fn, policy_kwargs = tool
+                    policy_kwargs = dict(policy_kwargs or {})
+                else:
+                    fn = getattr(tool, "func", tool)
+                speculatable = pure = config.speculate_user_tools
+                deterministic = bool(policy_kwargs.get("deterministic", False))
+                latency_hint_ms = float(policy_kwargs.get("latency_hint_ms", 1000.0))
             spec.registry.register(
                 name,
                 fn,
-                speculatable=config.speculate_user_tools,
-                pure=config.speculate_user_tools,
-                deterministic=bool(policy_kwargs.get("deterministic", False)),
-                latency_hint_ms=float(policy_kwargs.get("latency_hint_ms", 1000.0)),
+                speculatable=speculatable,
+                pure=pure,
+                deterministic=deterministic,
+                latency_hint_ms=latency_hint_ms,
             )
 
 
