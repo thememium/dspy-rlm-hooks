@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from dspy_rlm_hooks.utils import (
+from dspy_rlm_hooks.core.utils import (
     _assemble_execution_code,
     _prepend_python_code,
     _strip_code_fences,

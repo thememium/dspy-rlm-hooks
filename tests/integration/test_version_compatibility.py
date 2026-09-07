@@ -6,7 +6,7 @@ import dspy
 import pytest
 
 from dspy_rlm_hooks import enable_rlm_hooks
-from dspy_rlm_hooks.patcher import _validate_rlm
+from dspy_rlm_hooks.core.patcher import _validate_rlm
 
 
 class TestDSPyVersionCompatibility:

@@ -24,7 +24,7 @@ from dspy_rlm_hooks import (
     PreIterationOutput,
     enable_rlm_hooks_with_tracing,
 )
-from dspy_rlm_hooks.tracing import _import_mlflow, _load_mlflow
+from dspy_rlm_hooks.core.tracing import _import_mlflow, _load_mlflow
 
 
 @pytest.fixture
@@ -52,7 +52,7 @@ def mock_mlflow():
     mock_mlflow_module.created_spans = created_spans
 
     with patch(
-        "dspy_rlm_hooks.tracing._import_mlflow", return_value=mock_mlflow_module
+        "dspy_rlm_hooks.core.tracing._import_mlflow", return_value=mock_mlflow_module
     ):
         yield mock_mlflow_module, mock_span
 
@@ -68,7 +68,7 @@ class TestLoadMlflowSuccess:
 class TestImportMlflow:
     def test_import_mlflow_raises_when_missing(self):
         """``_import_mlflow`` raises a clear ImportError when mlflow is absent."""
-        with patch("dspy_rlm_hooks.tracing._load_mlflow", return_value=None):
+        with patch("dspy_rlm_hooks.core.tracing._load_mlflow", return_value=None):
             with pytest.raises(ImportError, match="mlflow is required"):
                 _import_mlflow()
 
@@ -76,7 +76,7 @@ class TestImportMlflow:
         """``_import_mlflow`` returns the module when it exposes ``start_span``."""
         mlflow_mod = MagicMock()
         mlflow_mod.start_span = MagicMock()
-        with patch("dspy_rlm_hooks.tracing._load_mlflow", return_value=mlflow_mod):
+        with patch("dspy_rlm_hooks.core.tracing._load_mlflow", return_value=mlflow_mod):
             assert _import_mlflow() is mlflow_mod
 
 

@@ -14,9 +14,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dspy_rlm_hooks.patcher import _max_iterations
-from dspy_rlm_hooks.predict_rlm_compat import enable_predict_rlm_hooks
-from dspy_rlm_hooks.types import PreIterationOutput
+from dspy_rlm_hooks.core.patcher import _max_iterations
+from dspy_rlm_hooks.core.predict_rlm_compat import enable_predict_rlm_hooks
+from dspy_rlm_hooks.core.types import PreIterationOutput
 
 
 class TestMaxIterations:

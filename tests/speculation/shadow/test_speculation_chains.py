@@ -261,7 +261,7 @@ def test_llm_spec_fns_counter_free_and_registered():
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 
-    import dspy_rlm_hooks.speculation_integration as SI
+    import dspy_rlm_hooks.speculation.integration as SI
 
     calls: list = []
 
@@ -300,7 +300,7 @@ def test_llm_spec_fns_counter_free_and_registered():
 
 
 def test_extract_sub_lm_text_shapes():
-    from dspy_rlm_hooks.speculation_integration import _extract_sub_lm_text
+    from dspy_rlm_hooks.speculation.integration import _extract_sub_lm_text
 
     assert _extract_sub_lm_text([{"text": "a"}]) == "a"
     assert _extract_sub_lm_text(["b"]) == "b"
@@ -447,7 +447,7 @@ def test_llm_spec_fns_error_paths(monkeypatch):
     """Empty prompts, empty batch, and the no-LM error path."""
     import dspy
 
-    from dspy_rlm_hooks.speculation_integration import _make_llm_spec_fns
+    from dspy_rlm_hooks.speculation.integration import _make_llm_spec_fns
 
     rlm = SimpleNamespace(sub_lm=None)
     fns = _make_llm_spec_fns(rlm)
@@ -455,7 +455,7 @@ def test_llm_spec_fns_error_paths(monkeypatch):
         fns["llm_query"]("")
     assert fns["llm_query_batched"]([]) == []
 
-    import dspy_rlm_hooks.speculation_integration as SI
+    import dspy_rlm_hooks.speculation.integration as SI
 
     monkeypatch.setattr(dspy.settings, "lm", None, raising=False)
     with pytest.raises(Exception):

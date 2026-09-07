@@ -17,7 +17,7 @@ from dspy_rlm_hooks import (
     enable_rlm_hooks,
     enable_rlm_hooks_with_tracing,
 )
-from dspy_rlm_hooks.tracing import (
+from dspy_rlm_hooks.core.tracing import (
     _ensure_type,
     _format_python_code,
     _import_mlflow,
@@ -53,7 +53,7 @@ def mock_mlflow():
     mock_mlflow_module.created_spans = created_spans
 
     with patch(
-        "dspy_rlm_hooks.tracing._import_mlflow", return_value=mock_mlflow_module
+        "dspy_rlm_hooks.core.tracing._import_mlflow", return_value=mock_mlflow_module
     ):
         yield mock_mlflow_module, mock_span
 
@@ -564,7 +564,7 @@ class TestTracingImportError:
     def test_raises_import_error_when_mlflow_missing(self, mock_rlm):
         """Test that enable_rlm_hooks_with_tracing raises ImportError when mlflow is not installed."""
         with patch(
-            "dspy_rlm_hooks.tracing._import_mlflow",
+            "dspy_rlm_hooks.core.tracing._import_mlflow",
             side_effect=ImportError("mlflow is required"),
         ):
             with pytest.raises(ImportError, match="mlflow is required"):
@@ -578,7 +578,7 @@ class TestTracingImportError:
     def test_no_hooks_still_requires_mlflow(self, mock_rlm):
         """Test that even with no hooks, mlflow import is validated."""
         with patch(
-            "dspy_rlm_hooks.tracing._import_mlflow",
+            "dspy_rlm_hooks.core.tracing._import_mlflow",
             side_effect=ImportError("mlflow is required"),
         ):
             with pytest.raises(ImportError, match="mlflow is required"):
@@ -704,7 +704,7 @@ class TestEnsureType:
         """Test that a mismatched type logs a warning and returns as-is."""
         import logging
 
-        with caplog.at_level(logging.WARNING, logger="dspy_rlm_hooks.tracing"):
+        with caplog.at_level(logging.WARNING, logger="dspy_rlm_hooks.core.tracing"):
             result = _ensure_type("not an output", PreIterationOutput)
 
         assert result == "not an output"
@@ -714,7 +714,7 @@ class TestEnsureType:
         """Test that None passed to a non-None type logs warning."""
         import logging
 
-        with caplog.at_level(logging.WARNING, logger="dspy_rlm_hooks.tracing"):
+        with caplog.at_level(logging.WARNING, logger="dspy_rlm_hooks.core.tracing"):
             result = _ensure_type(None, PreExecutionOutput)
 
         assert result is None
@@ -918,7 +918,7 @@ class TestAutomaticTracing:
     def test_detection_requires_mlflow_span_api(self):
         mlflow_without_tracing = MagicMock(spec=[])
         with patch(
-            "dspy_rlm_hooks.tracing._load_mlflow",
+            "dspy_rlm_hooks.core.tracing._load_mlflow",
             return_value=mlflow_without_tracing,
         ):
             assert _is_mlflow_tracing_available() is False
@@ -927,7 +927,7 @@ class TestAutomaticTracing:
         mlflow_with_tracing = MagicMock()
         mlflow_with_tracing.start_span = MagicMock()
         with patch(
-            "dspy_rlm_hooks.tracing._load_mlflow",
+            "dspy_rlm_hooks.core.tracing._load_mlflow",
             return_value=mlflow_with_tracing,
         ):
             assert _is_mlflow_tracing_available() is True
@@ -936,7 +936,7 @@ class TestAutomaticTracing:
         mlflow_without_tracing = MagicMock(spec=[])
         with (
             patch(
-                "dspy_rlm_hooks.tracing._load_mlflow",
+                "dspy_rlm_hooks.core.tracing._load_mlflow",
                 return_value=mlflow_without_tracing,
             ),
             pytest.raises(ImportError, match="mlflow>=2.14.0"),
@@ -956,7 +956,7 @@ class TestAutomaticTracing:
             _load_mlflow()
 
     def test_public_enable_signature_matches_non_tracing_implementation(self):
-        from dspy_rlm_hooks.patcher import enable_rlm_hooks as non_tracing_enable
+        from dspy_rlm_hooks.core.patcher import enable_rlm_hooks as non_tracing_enable
 
         assert inspect.signature(enable_rlm_hooks) == inspect.signature(
             non_tracing_enable

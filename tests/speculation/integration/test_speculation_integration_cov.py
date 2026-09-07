@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from dspy_rlm_hooks.speculation_integration import (
+from dspy_rlm_hooks.speculation.integration import (
     _close_speculators,
     _install_claim_hooks,
     _maybe_begin_streaming_turn,
@@ -58,7 +58,7 @@ def _setup_real(mock_rlm, mock_repl, tools):
 def test_close_speculators_handles_live_dead_and_erroring_specs():
     """_close_speculators drains live specs, swallows close() errors, skips
     GC'd (dead) refs, and clears the registry."""
-    from dspy_rlm_hooks.speculation_integration import _active_speculators
+    from dspy_rlm_hooks.speculation.integration import _active_speculators
 
     saved = list(_active_speculators)
     _active_speculators.clear()
@@ -525,7 +525,7 @@ def test_snapshot_reads_import_bound_names_are_not_required():
     """A name bound by an import statement is not a snapshot-required read."""
     import ast
 
-    from dspy_rlm_hooks.speculation_integration import _snapshot_reads
+    from dspy_rlm_hooks.speculation.integration import _snapshot_reads
 
     tree = ast.parse("import time\nstamp = time.perf_counter()\n")
     assert _snapshot_reads(tree) == set()
@@ -535,7 +535,7 @@ def test_pure_assigned_names_covers_assign_and_imports():
     """Assign targets not read in their own value and import aliases are pure."""
     import ast
 
-    from dspy_rlm_hooks.speculation_integration import _pure_assigned_names
+    from dspy_rlm_hooks.speculation.integration import _pure_assigned_names
 
     tree = ast.parse("a = 1\nb = a + 1\nimport os\nfrom json import dumps as jd\n")
     assert _pure_assigned_names(tree) == {"a", "b", "os", "jd"}
@@ -556,7 +556,7 @@ def _seed_setup(mock_rlm, mock_repl):
 
 def test_live_state_seed_skips_pure_assigned_reads(mock_rlm, mock_repl):
     """A name read before it is purely assigned later needs no snapshot."""
-    from dspy_rlm_hooks.speculation_integration import _live_state_seed
+    from dspy_rlm_hooks.speculation.integration import _live_state_seed
 
     spec = _seed_setup(mock_rlm, mock_repl)
     mock_repl.execute = MagicMock(return_value="None")
@@ -569,7 +569,7 @@ def test_live_state_seed_skips_pure_assigned_reads(mock_rlm, mock_repl):
 
 def test_live_state_seed_skips_loop_targets(mock_rlm, mock_repl):
     """Loop targets over a non-empty literal need no snapshot."""
-    from dspy_rlm_hooks.speculation_integration import _live_state_seed
+    from dspy_rlm_hooks.speculation.integration import _live_state_seed
 
     spec = _seed_setup(mock_rlm, mock_repl)
     mock_repl.execute = MagicMock(return_value="None")
@@ -583,7 +583,7 @@ def test_live_state_seed_skips_loop_targets(mock_rlm, mock_repl):
 
 def test_live_state_seed_non_dict_probe_result(mock_rlm, mock_repl):
     """A probe whose output does not literal_eval to a dict is discarded."""
-    from dspy_rlm_hooks.speculation_integration import _live_state_seed
+    from dspy_rlm_hooks.speculation.integration import _live_state_seed
 
     spec = _seed_setup(mock_rlm, mock_repl)
     mock_repl.execute = MagicMock(return_value="None")

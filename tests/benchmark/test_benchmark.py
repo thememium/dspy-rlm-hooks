@@ -112,7 +112,9 @@ def test_benchmark_cli_detects_mismatch(tmp_path, monkeypatch):
 
         return gen
 
-    monkeypatch.setattr(BM, "_scripted_generate_action", broken)
+    monkeypatch.setattr(
+        "dspy_rlm_hooks.benchmark.runner._scripted_generate_action", broken
+    )
     rc = BM.main(
         [
             "--variants",
@@ -146,7 +148,9 @@ def test_benchmark_teardown_and_stats_error_paths(monkeypatch):
         raise RuntimeError("stats boom")
 
     monkeypatch.setattr(pkg, "disable_rlm_speculation", lambda *a, **k: None)
-    monkeypatch.setattr(pkg.speculator.Speculator, "stats", lambda self: stats_boom())
+    monkeypatch.setattr(
+        pkg.speculation.speculator.Speculator, "stats", lambda self: stats_boom()
+    )
     res2 = B.run_variant(scenario, "spec", repeats=1, pace_ms=0.0)
     assert res2["spec_stats_median"]["speculated"] == 0  # stats failed -> zeros
 

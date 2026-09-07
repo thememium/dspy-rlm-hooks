@@ -21,7 +21,7 @@ from dspy_rlm_hooks import (
     disable_rlm_hooks,
     enable_rlm_hooks,
 )
-from dspy_rlm_hooks.patcher import _run_async
+from dspy_rlm_hooks.core.patcher import _run_async
 
 # ---------------------------------------------------------------------------
 # _run_async
@@ -50,7 +50,7 @@ class TestRunAsyncPatcher:
         async def coro():
             return "new_loop_result"
 
-        with patch("dspy_rlm_hooks.patcher.asyncio") as mock_asyncio:
+        with patch("dspy_rlm_hooks.core.patcher.asyncio") as mock_asyncio:
             mock_asyncio.get_running_loop = MagicMock()  # no RuntimeError
             mock_asyncio.new_event_loop = MagicMock()
             mock_loop = MagicMock()
@@ -86,7 +86,7 @@ class TestVerboseLogging:
         mock_rlm.generate_action.return_value = action
         mock_rlm._process_execution_result.return_value = mock_history
 
-        with patch("dspy_rlm_hooks.patcher.logger") as mock_logger:
+        with patch("dspy_rlm_hooks.core.patcher.logger") as mock_logger:
             mock_rlm._execute_iteration(
                 mock_repl,
                 mock_variables,
@@ -115,7 +115,7 @@ class TestVerboseLogging:
         mock_rlm.generate_action.acall = AsyncMock(return_value=action)
         mock_rlm._process_execution_result.return_value = mock_history
 
-        with patch("dspy_rlm_hooks.patcher.logger") as mock_logger:
+        with patch("dspy_rlm_hooks.core.patcher.logger") as mock_logger:
             await mock_rlm._aexecute_iteration(
                 mock_repl,
                 mock_variables,
@@ -235,10 +235,10 @@ class TestPredictRLMBranches:
         # _is_predict_rlm is imported locally in patcher.py functions,
         # so we need to patch it in the predict_rlm_compat module
         with patch(
-            "dspy_rlm_hooks.predict_rlm_compat._is_predict_rlm", return_value=True
+            "dspy_rlm_hooks.core.predict_rlm_compat._is_predict_rlm", return_value=True
         ):
             with patch(
-                "dspy_rlm_hooks.predict_rlm_compat.enable_predict_rlm_hooks"
+                "dspy_rlm_hooks.core.predict_rlm_compat.enable_predict_rlm_hooks"
             ) as mock_enable:
                 enable_rlm_hooks(
                     mock_rlm,
@@ -259,10 +259,10 @@ class TestPredictRLMBranches:
     def test_disable_rlm_hooks_detects_predict_rlm(self, mock_rlm):
         """Test that disable_rlm_hooks delegates to disable_predict_rlm_hooks for PredictRLM."""
         with patch(
-            "dspy_rlm_hooks.predict_rlm_compat._is_predict_rlm", return_value=True
+            "dspy_rlm_hooks.core.predict_rlm_compat._is_predict_rlm", return_value=True
         ):
             with patch(
-                "dspy_rlm_hooks.predict_rlm_compat.disable_predict_rlm_hooks"
+                "dspy_rlm_hooks.core.predict_rlm_compat.disable_predict_rlm_hooks"
             ) as mock_disable:
                 disable_rlm_hooks(mock_rlm)
 
@@ -271,7 +271,7 @@ class TestPredictRLMBranches:
     def test_enable_rlm_hooks_normal_path(self, mock_rlm):
         """Test that enable_rlm_hooks uses normal path for non-PredictRLM."""
         with patch(
-            "dspy_rlm_hooks.predict_rlm_compat._is_predict_rlm", return_value=False
+            "dspy_rlm_hooks.core.predict_rlm_compat._is_predict_rlm", return_value=False
         ):
             enable_rlm_hooks(mock_rlm, pre_iteration_hook=MagicMock())
 
@@ -281,7 +281,7 @@ class TestPredictRLMBranches:
     def test_disable_rlm_hooks_normal_path(self, mock_rlm):
         """Test that disable_rlm_hooks uses normal path for non-PredictRLM."""
         with patch(
-            "dspy_rlm_hooks.predict_rlm_compat._is_predict_rlm", return_value=False
+            "dspy_rlm_hooks.core.predict_rlm_compat._is_predict_rlm", return_value=False
         ):
             enable_rlm_hooks(mock_rlm, pre_iteration_hook=MagicMock())
             assert hasattr(mock_rlm, "_hook_pre_iteration")

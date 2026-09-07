@@ -160,7 +160,7 @@ class TestRealRLMValidation:
 
     def test_validate_rlm_with_real_rlm(self):
         """Test that _validate_rlm passes with a real dspy.RLM instance."""
-        from dspy_rlm_hooks.patcher import _validate_rlm
+        from dspy_rlm_hooks.core.patcher import _validate_rlm
 
         rlm = dspy.RLM(
             signature="question -> answer",

@@ -21,7 +21,7 @@ from dspy.primitives.prediction import Prediction
 from dspy.streaming import StreamResponse
 
 from dspy_rlm_hooks import enable_rlm_speculation
-from dspy_rlm_hooks.speculation_integration import (
+from dspy_rlm_hooks.speculation.integration import (
     _maybe_begin_streaming_turn,
     _StreamingGenerateAction,
     disable_rlm_speculation,

@@ -53,7 +53,9 @@ class TestPredictRLMImportFallback:
                 del sys.modules["dspy_rlm_hooks"]
 
             # Mock the predict_rlm_compat import to fail
-            with patch.dict(sys.modules, {"dspy_rlm_hooks.predict_rlm_compat": None}):
+            with patch.dict(
+                sys.modules, {"dspy_rlm_hooks.core.predict_rlm_compat": None}
+            ):
                 # Reimport the module
                 import dspy_rlm_hooks
 

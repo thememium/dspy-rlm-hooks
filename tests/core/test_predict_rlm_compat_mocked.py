@@ -13,14 +13,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from dspy.primitives.repl_types import REPLHistory
 
-from dspy_rlm_hooks.predict_rlm_compat import (
+from dspy_rlm_hooks.core.predict_rlm_compat import (
     _is_predict_rlm,
     _run_async,
     _StopIteration,
     disable_predict_rlm_hooks,
     enable_predict_rlm_hooks,
 )
-from dspy_rlm_hooks.types import (
+from dspy_rlm_hooks.core.types import (
     PostExecutionOutput,
     PostIterationOutput,
     PreExecutionOutput,
@@ -55,7 +55,7 @@ def mock_predict_rlm_instance():
 def patch_is_predict_rlm(monkeypatch):
     """Auto-patch _is_predict_rlm to return True for all tests."""
     monkeypatch.setattr(
-        "dspy_rlm_hooks.predict_rlm_compat._is_predict_rlm",
+        "dspy_rlm_hooks.core.predict_rlm_compat._is_predict_rlm",
         lambda _obj: True,
     )
 
@@ -86,7 +86,7 @@ class TestRunAsync:
             return "new_loop_result"
 
         # Simulate a running loop by making get_running_loop not raise
-        with patch("dspy_rlm_hooks.predict_rlm_compat.asyncio") as mock_asyncio:
+        with patch("dspy_rlm_hooks.core.predict_rlm_compat.asyncio") as mock_asyncio:
             mock_asyncio.get_running_loop = MagicMock()  # no RuntimeError
             mock_asyncio.new_event_loop = MagicMock()
             mock_loop = MagicMock()

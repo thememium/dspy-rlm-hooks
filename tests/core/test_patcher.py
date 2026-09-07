@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from dspy_rlm_hooks.patcher import (
+from dspy_rlm_hooks.core.patcher import (
     _REQUIRED_METHODS,
     _execute_code,
     _validate_rlm,

@@ -9,13 +9,13 @@ from types import SimpleNamespace
 import pytest
 from dspy.primitives.python_interpreter import PythonInterpreter
 
-from dspy_rlm_hooks.speculation_integration import (
+from dspy_rlm_hooks.speculation.integration import (
     _SNAPSHOT_MAX_VALUE_CHARS,
     _live_state_seed,
     disable_rlm_speculation,
     enable_rlm_speculation,
 )
-from dspy_rlm_hooks.speculator import Speculator
+from dspy_rlm_hooks.speculation.speculator import Speculator
 
 
 @pytest.mark.parametrize(

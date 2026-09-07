@@ -24,7 +24,7 @@ import pytest
 
 from dspy_rlm_hooks import PostExecutionOutput, PreExecutionOutput, enable_rlm_hooks
 from dspy_rlm_hooks.speculation.config import SpeculationConfig
-from dspy_rlm_hooks.speculation_integration import (
+from dspy_rlm_hooks.speculation.integration import (
     _install_claim_hooks,
     _make_claim_hook,
     _placeholder,
@@ -32,7 +32,7 @@ from dspy_rlm_hooks.speculation_integration import (
     disable_rlm_speculation,
     enable_rlm_speculation,
 )
-from dspy_rlm_hooks.speculator import Speculator
+from dspy_rlm_hooks.speculation.speculator import Speculator
 
 
 def _real_execute_code(repl, code, input_args):
@@ -715,7 +715,7 @@ def test_shadow_end_exception_swallowed(mock_rlm, mock_repl, monkeypatch):
 
 def test_install_claim_hooks_exception_swallowed(mock_rlm, mock_repl, monkeypatch):
     """A claim-hook install failure is swallowed; real execution proceeds."""
-    import dspy_rlm_hooks.speculation_integration as si
+    import dspy_rlm_hooks.speculation.integration as si
 
     mock_rlm.max_llm_calls = 50
     tools = {"llm_query": lambda p: f"r:{p}"}
@@ -914,7 +914,7 @@ def test_install_claim_hooks_non_introspectable_tool_signature():
     installation — the signature fallback leaves the hook untouched."""
 
     from dspy_rlm_hooks.speculation.guards import is_claim_hook
-    from dspy_rlm_hooks.speculation_integration import _install_claim_hooks
+    from dspy_rlm_hooks.speculation.integration import _install_claim_hooks
 
     program = SimpleNamespace(max_llm_calls=50)
     spec = Speculator()

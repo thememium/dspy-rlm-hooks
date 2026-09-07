@@ -14,15 +14,15 @@ from unittest.mock import patch
 import pytest
 
 import dspy_rlm_hooks.speculation.hooks as _hooks
-import dspy_rlm_hooks.speculation_integration as SI
+import dspy_rlm_hooks.speculation.integration as SI
 from dspy_rlm_hooks.speculation.guards import fully_raw
 from dspy_rlm_hooks.speculation.hooks import _claim_wait_budget, _evict, _race_hedge
+from dspy_rlm_hooks.speculation.integration import _live_state_seed, _sync_registry_fns
 from dspy_rlm_hooks.speculation.session import EventBus, Launcher, ToolRegistry
 from dspy_rlm_hooks.speculation.shadow import Segment, ShadowRunner
 from dspy_rlm_hooks.speculation.store import SpecStore, Speculation
 from dspy_rlm_hooks.speculation.streaming import plan_peeks_with_chains
 from dspy_rlm_hooks.speculation.tool import ToolSpec, spec_key, split_batch_call
-from dspy_rlm_hooks.speculation_integration import _live_state_seed, _sync_registry_fns
 
 REAL_BUILTINS = dict(builtins.__dict__)
 
