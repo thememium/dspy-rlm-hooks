@@ -39,7 +39,7 @@ import re
 from types import MethodType
 from typing import Any
 
-from dspy_rlm_hooks.types import (
+from dspy_rlm_hooks.core.types import (
     PostExecutionHook,
     PostExecutionOutput,
     PostIterationHook,
@@ -49,7 +49,7 @@ from dspy_rlm_hooks.types import (
     PreIterationHook,
     PreIterationOutput,
 )
-from dspy_rlm_hooks.utils import _assemble_execution_code
+from dspy_rlm_hooks.core.utils import _assemble_execution_code
 
 logger = logging.getLogger(__name__)
 
@@ -436,7 +436,7 @@ def enable_rlm_hooks_with_tracing(
 
     # Import the non-dispatching patcher here to avoid routing back through
     # automatic MLflow detection.
-    from dspy_rlm_hooks.patcher import enable_rlm_hooks
+    from dspy_rlm_hooks.core.patcher import enable_rlm_hooks
 
     enable_rlm_hooks(
         rlm,

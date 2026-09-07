@@ -7,7 +7,7 @@ telemetry, and a callback dispatch system.
 All ``predict_rlm`` imports are **lazy** — they happen inside functions so
 this module can be imported even when predict-rlm is not installed.
 
-Lifecycle (same 4-hook contract as :mod:`dspy_rlm_hooks.patcher`)::
+Lifecycle (same 4-hook contract as :mod:`dspy_rlm_hooks.core.patcher`)::
 
     pre_iteration_hook → generate_action → pre_execution_hook → execute → post_execution_hook → post_iteration_hook
 
@@ -27,13 +27,13 @@ import logging
 from types import MethodType
 from typing import Any, cast
 
-from dspy_rlm_hooks.types import (
+from dspy_rlm_hooks.core.types import (
     PostExecutionOutput,
     PostIterationOutput,
     PreExecutionOutput,
     PreIterationOutput,
 )
-from dspy_rlm_hooks.utils import (
+from dspy_rlm_hooks.core.utils import (
     _assemble_execution_code,
     _prepend_python_code,
     _strip_code_fences,
@@ -60,7 +60,7 @@ class _StopIteration(Exception):
 def _run_async(coroutine: Any) -> Any:
     """Run an async coroutine, handling both sync and async contexts.
 
-    Mirrors :func:`dspy_rlm_hooks.patcher._run_async`.
+    Mirrors :func:`dspy_rlm_hooks.core.patcher._run_async`.
     """
     try:
         asyncio.get_running_loop()
@@ -108,7 +108,7 @@ def enable_predict_rlm_hooks(
     """Install lifecycle hooks on a :class:`~predict_rlm.PredictRLM` instance.
 
     This is the PredictRLM counterpart of
-    :func:`dspy_rlm_hooks.patcher.enable_rlm_hooks`.  All patches are
+    :func:`dspy_rlm_hooks.core.patcher.enable_rlm_hooks`.  All patches are
     **instance-level** — no class attributes are modified.
 
     All four hooks support **full mutation**:

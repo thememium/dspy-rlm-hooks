@@ -18,7 +18,7 @@ import logging
 from types import MethodType
 from typing import TYPE_CHECKING, Any, cast
 
-from dspy_rlm_hooks.types import (
+from dspy_rlm_hooks.core.types import (
     PostExecutionHook,
     PostExecutionOutput,
     PostIterationHook,
@@ -28,7 +28,7 @@ from dspy_rlm_hooks.types import (
     PreIterationHook,
     PreIterationOutput,
 )
-from dspy_rlm_hooks.utils import (
+from dspy_rlm_hooks.core.utils import (
     _assemble_execution_code,
     _prepend_python_code,
     _strip_code_fences,
@@ -372,10 +372,10 @@ def enable_rlm_hooks(
         ...
         >>> enable_rlm_hooks(rlm, pre_iteration_hook=my_pre_iter)
     """
-    from dspy_rlm_hooks.predict_rlm_compat import _is_predict_rlm
+    from dspy_rlm_hooks.core.predict_rlm_compat import _is_predict_rlm
 
     if _is_predict_rlm(rlm):
-        from dspy_rlm_hooks.predict_rlm_compat import enable_predict_rlm_hooks
+        from dspy_rlm_hooks.core.predict_rlm_compat import enable_predict_rlm_hooks
 
         enable_predict_rlm_hooks(
             rlm,
@@ -413,10 +413,10 @@ def disable_rlm_hooks(rlm: Any) -> None:
     Example:
         >>> disable_rlm_hooks(rlm)
     """
-    from dspy_rlm_hooks.predict_rlm_compat import _is_predict_rlm
+    from dspy_rlm_hooks.core.predict_rlm_compat import _is_predict_rlm
 
     if _is_predict_rlm(rlm):
-        from dspy_rlm_hooks.predict_rlm_compat import disable_predict_rlm_hooks
+        from dspy_rlm_hooks.core.predict_rlm_compat import disable_predict_rlm_hooks
 
         disable_predict_rlm_hooks(rlm)
         return
