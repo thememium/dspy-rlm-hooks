@@ -115,6 +115,23 @@ def _execute_code(self: Any, repl: Any, code: str, input_args: dict[str, Any]) -
         return f"[Error] {exc}"
 
 
+def _generate_action_signature_kwargs(
+    rlm: Any, interpreter_factory: Any
+) -> dict[str, Any]:
+    """Per-call ``signature=`` kwargs for ``generate_action``.
+
+    DSPy >=3.4 passes ``interpreter_factory`` down to ``_execute_iteration``/
+    ``_aexecute_iteration`` and derives a per-call action signature from it via
+    ``RLM._action_signature_for_current_factory``. Older DSPy has neither the
+    trailing argument nor the helper, so this returns ``{}`` and the call stays
+    exactly as it was on DSPy <=3.3.
+    """
+    helper = getattr(rlm, "_action_signature_for_current_factory", None)
+    if helper is None or interpreter_factory is None:
+        return {}
+    return {"signature": helper(interpreter_factory)}
+
+
 def _execute_iteration(
     self: Any,
     repl: Any,
@@ -123,6 +140,7 @@ def _execute_iteration(
     iteration: int,
     input_args: dict[str, Any],
     output_field_names: list[str],
+    interpreter_factory: Any = None,
 ) -> Prediction | REPLHistory:
     """Synchronous RLM iteration with hook support.
 
@@ -151,6 +169,7 @@ def _execute_iteration(
         [variable.format() for variable in variables], prompt_context
     )
     action = self.generate_action(
+        **_generate_action_signature_kwargs(self, interpreter_factory),
         variables_info=variables_info,
         repl_history=history,
         iteration=f"{iteration + 1}/{_max_iterations(self)}",
@@ -228,6 +247,7 @@ async def _aexecute_iteration(
     iteration: int,
     input_args: dict[str, Any],
     output_field_names: list[str],
+    interpreter_factory: Any = None,
 ) -> Prediction | REPLHistory:
     """Asynchronous RLM iteration with hook support.
 
@@ -255,6 +275,7 @@ async def _aexecute_iteration(
         [variable.format() for variable in variables], prompt_context
     )
     pred = await self.generate_action.acall(
+        **_generate_action_signature_kwargs(self, interpreter_factory),
         variables_info=variables_info,
         repl_history=history,
         iteration=f"{iteration + 1}/{_max_iterations(self)}",
