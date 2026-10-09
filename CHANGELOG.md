@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.1.15 (2026-10-09)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.14...v0.1.15)
+
+### 🚀 Enhancements
+
+- **predict_rlm_compat**: add interpreter_factory support ([473921b](https://github.com/thememium/dspy-rlm-hooks/commit/473921bba710f34dc2cb659a93adf48a12a01058))
+
+### 💅 Refactors
+
+- **dspy_rlm_hooks/benchmark/fakes**: add **kwargs to _scripted_generate_action ([04299ec](https://github.com/thememium/dspy-rlm-hooks/commit/04299ec6dcb3d9dd39e29a4f5dbec8ed5af0597e))
+- adapt timed_iteration signature for DSPy ≥3.4 compatibility ([2d0b3df](https://github.com/thememium/dspy-rlm-hooks/commit/2d0b3df1155b51f0e30c5f5ba431e2fa52a0f06d))
+- **dspy_rlm_hooks**: support interpreter_factory for DSPy 3.4 ([ca8c737](https://github.com/thememium/dspy-rlm-hooks/commit/ca8c7376f6b9bba6e414d66178ebf502d8ea7cd0))
+- **patcher**: add interpreter_factory support for DSPy ≥ 3.4 ([53f51fd](https://github.com/thememium/dspy-rlm-hooks/commit/53f51fd8f8370fc7be61c15adb497eb7ea25569b))
+
+### ✅ Tests
+
+- **speculation**: add coverage tests for interpreter_factory argument forwarding ([44ee48c](https://github.com/thememium/dspy-rlm-hooks/commit/44ee48cac96a458f1f696fe67081c562beba6b8a))
+- **core**: add coverage tests for DSPy >=3.4 interpreter_factory ([3426c33](https://github.com/thememium/dspy-rlm-hooks/commit/3426c335dbb254c1af9261ceac8b178b4361b769))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
 ## v0.1.14 (2026-09-07)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.13...v0.1.14)
