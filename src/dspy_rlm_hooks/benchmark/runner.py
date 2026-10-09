@@ -43,13 +43,11 @@ def _instrument(program: Any, record: TrialRecord) -> None:
     orig_iter = program._execute_iteration
     orig_code = program._execute_code
 
-    def timed_iteration(
-        repl, variables, history, iteration, input_args, output_field_names
-    ):
+    def timed_iteration(*args):
+        # Forward everything: DSPy >=3.4 appends a trailing
+        # ``interpreter_factory`` argument to ``_execute_iteration``.
         t0 = time.perf_counter()
-        out = orig_iter(
-            repl, variables, history, iteration, input_args, output_field_names
-        )
+        out = orig_iter(*args)
         record.iter_ms.append((time.perf_counter() - t0) * 1000)
         return out
 
