@@ -30,11 +30,20 @@ def _speculation_execute_iteration(
     iteration: int,
     input_args: dict[str, Any],
     output_field_names: list[str],
+    interpreter_factory: Any = None,
 ) -> Any:
-    """Wrapped sync iteration: begin the streaming turn before generation."""
+    """Wrapped sync iteration: begin the streaming turn before generation.
+
+    DSPy >=3.4 appends a trailing ``interpreter_factory`` argument; it is
+    forwarded only when present so the inner method (either the raw DSPy
+    <=3.3 method or the hook-patched one) sees its expected arity.
+    """
     _maybe_begin_streaming_turn(self, repl, input_args)
     inner = self._speculation_original_execute_iteration
-    return inner(repl, variables, history, iteration, input_args, output_field_names)
+    args = (repl, variables, history, iteration, input_args, output_field_names)
+    if interpreter_factory is None:
+        return inner(*args)
+    return inner(*args, interpreter_factory)
 
 
 async def _speculation_aexecute_iteration(
@@ -45,13 +54,15 @@ async def _speculation_aexecute_iteration(
     iteration: int,
     input_args: dict[str, Any],
     output_field_names: list[str],
+    interpreter_factory: Any = None,
 ) -> Any:
     """Wrapped async iteration: begin the streaming turn before generation."""
     _maybe_begin_streaming_turn(self, repl, input_args)
     inner = self._speculation_original_aexecute_iteration
-    return await inner(
-        repl, variables, history, iteration, input_args, output_field_names
-    )
+    args = (repl, variables, history, iteration, input_args, output_field_names)
+    if interpreter_factory is None:
+        return await inner(*args)
+    return await inner(*args, interpreter_factory)
 
 
 def _speculation_execute_code(
