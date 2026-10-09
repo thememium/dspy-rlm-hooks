@@ -150,6 +150,7 @@ def enable_predict_rlm_hooks(
         iteration: int,
         input_args: dict[str, Any],
         output_field_names: Any,
+        interpreter_factory: Any = None,
         **kw: Any,
     ) -> Any:
         # --- pre-iteration hook ---
@@ -185,6 +186,19 @@ def enable_predict_rlm_hooks(
             "prompt_context": prompt_context,
         }
         try:
+            # DSPy >=3.4 passes ``interpreter_factory`` positionally; omit it on
+            # older DSPy, where the original method takes only six arguments.
+            if interpreter_factory is None:
+                return orig_execute(
+                    self,
+                    repl,
+                    variables,
+                    history,
+                    iteration,
+                    input_args,
+                    output_field_names,
+                    **kw,
+                )
             return orig_execute(
                 self,
                 repl,
@@ -193,6 +207,7 @@ def enable_predict_rlm_hooks(
                 iteration,
                 input_args,
                 output_field_names,
+                interpreter_factory,
                 **kw,
             )
         except _StopIteration as exc:
@@ -215,6 +230,7 @@ def enable_predict_rlm_hooks(
         iteration: int,
         input_args: dict[str, Any],
         output_field_names: Any,
+        interpreter_factory: Any = None,
         **kw: Any,
     ) -> Any:
         # --- pre-iteration hook (async) ---
@@ -249,6 +265,18 @@ def enable_predict_rlm_hooks(
             "prompt_context": prompt_context,
         }
         try:
+            # See the sync wrapper: omit ``interpreter_factory`` on DSPy <=3.3.
+            if interpreter_factory is None:
+                return await orig_aexecute(
+                    self,
+                    repl,
+                    variables,
+                    history,
+                    iteration,
+                    input_args,
+                    output_field_names,
+                    **kw,
+                )
             return await orig_aexecute(
                 self,
                 repl,
@@ -257,6 +285,7 @@ def enable_predict_rlm_hooks(
                 iteration,
                 input_args,
                 output_field_names,
+                interpreter_factory,
                 **kw,
             )
         except _StopIteration as exc:
