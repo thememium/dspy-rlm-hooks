@@ -220,14 +220,12 @@ def _streaming_wrapper(mock_rlm):
 
 
 def test_streaming_generate_ensure_cached(mock_rlm):
-    """_ensure returns the cached (sync, async) pair on repeat calls (line 329)."""
+    """_ensure returns the cached async wrapper on repeat calls (line 329)."""
     wrapper = _streaming_wrapper(mock_rlm)
     first = wrapper._ensure()
     second = wrapper._ensure()
     assert second is not None
-    # The cached sync/async callables are reused (line 329).
-    assert second[0] is first[0]
-    assert second[1] is first[1]
+    assert second is first
 
 
 def test_streaming_generate_feed_item_non_stream(mock_rlm):
@@ -307,7 +305,7 @@ def test_streaming_generate_call_streams_unavailable(mock_rlm, monkeypatch):
 
 
 def test_streaming_generate_call_prediction_item(mock_rlm, monkeypatch):
-    """__call__ returns a Prediction yielded by the sync stream (lines 378-380)."""
+    """__call__ returns a Prediction yielded by the async stream (lines 378-380)."""
     from dspy.primitives.prediction import Prediction
 
     wrapper = _streaming_wrapper(mock_rlm)
@@ -315,11 +313,11 @@ def test_streaming_generate_call_prediction_item(mock_rlm, monkeypatch):
     pred = Prediction()
 
     def fake_streamify(*a, **k):
-        def gen(*a, **k):
+        async def agen(*a, **k):
             yield "not a prediction"
             yield pred
 
-        return gen
+        return agen
 
     monkeypatch.setattr("dspy.streaming.streamify", fake_streamify)
     result = wrapper("x")
