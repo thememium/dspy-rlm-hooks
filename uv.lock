@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -714,6 +714,7 @@ name = "dspy-rlm-hooks"
 version = "0.1.15"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "dspy" },
     { name = "pydantic" },
 ]
@@ -742,6 +743,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.13.0" },
     { name = "dspy", specifier = ">=3.1.0" },
     { name = "mlflow", marker = "extra == 'tracing'", specifier = ">=2.14.0" },
     { name = "predict-rlm", marker = "extra == 'predict-rlm'", specifier = ">=0.1.0" },
