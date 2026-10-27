@@ -185,10 +185,30 @@ class _StreamingGenerateAction:
         try:
             from dspy.streaming import StreamListener, streamify
 
+            class CodeStreamListener(StreamListener):
+                def receive(self, chunk: Any) -> Any:
+                    # DSPy chooses delimiters by the adapter's exact class
+                    # name, although its parser/flush support subclasses.
+                    # Register the inherited wire format on this listener
+                    # only; do not mutate global settings or DSPy classes.
+                    from dspy import settings
+
+                    adapter = settings.adapter
+                    if adapter is not None:
+                        name = type(adapter).__name__
+                        if name not in self.adapter_identifiers:
+                            for base in type(adapter).__mro__[1:]:
+                                if base.__name__ in self.adapter_identifiers:
+                                    self.adapter_identifiers[name] = (
+                                        self.adapter_identifiers[base.__name__]
+                                    )
+                                    break
+                    return super().receive(chunk)
+
             self._stream = streamify(
                 _ThreadedProgram(self._orig),
                 stream_listeners=[
-                    StreamListener("code", predict=self._orig, allow_reuse=True)
+                    CodeStreamListener("code", predict=self._orig, allow_reuse=True)
                 ],
                 async_streaming=True,
                 is_async_program=True,
