@@ -315,17 +315,19 @@ async def test_threaded_program_propagates_program_error():
         await _ThreadedProgram(boom).acall()
 
 
-def test_threaded_program_waits_for_cancelled_worker():
-    """Cancelling a stream must not abandon a worker that still uses the loop.
+def test_threaded_program_does_not_raise_run_finished_on_cancel():
+    """A cancelled stream must not leave the worker pointing at a dead loop.
 
-    The default dspy asyncify sets ``abandon_on_cancel=True``: the loop shuts
-    down immediately and the worker's next ``anyio.from_thread.run`` raises
-    RunFinishedError.  ``_ThreadedProgram`` waits for the worker, so the loop
-    stays alive until every bridge call has returned.
+    ``abandon_on_cancel=False`` keeps the loop alive until the worker returns.
+    The worker may observe a normal cancellation, but never AnyIO's
+    ``RunFinishedError`` from a bridge call into a closed loop.
     """
     import asyncio
+    import contextlib
+    import threading
     import time
 
+    from anyio import RunFinishedError
     from anyio.from_thread import run as from_thread_run
     from dspy.streaming import streamify
 
@@ -334,34 +336,38 @@ def test_threaded_program_waits_for_cancelled_worker():
     async def noop():
         await asyncio.sleep(0)
 
+    started = threading.Event()
     errors = []
-    completed = []
 
     def program():
         try:
             for _ in range(40):
+                started.set()
                 from_thread_run(noop)
                 time.sleep(0.005)
         except BaseException as exc:
             errors.append(exc)
             raise
-        completed.append(True)
         return Prediction(output="done")
 
     async def consume(stream):
         async for _ in stream():
             pass
 
+    async def main():
+        task = asyncio.create_task(consume(stream))
+        while not started.is_set():
+            await asyncio.sleep(0.001)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
     stream = streamify(
         _ThreadedProgram(program), async_streaming=True, is_async_program=True
     )
-    try:
-        asyncio.run(asyncio.wait_for(consume(stream), 0.02))
-    except BaseException:
-        pass
+    asyncio.run(main())
 
-    assert completed == [True]
-    assert errors == []
+    assert not any(isinstance(exc, RunFinishedError) for exc in errors)
 
 
 # ---------------------------------------------------------------------------
@@ -774,9 +780,7 @@ async def test_threaded_program_translates_concurrent_cancellation(monkeypatch):
 
     from anyio import to_thread
 
-    from dspy_rlm_hooks.speculation.integration.streaming_turn import (
-        _ThreadedProgram,
-    )
+    from dspy_rlm_hooks.speculation.integration.streaming_turn import _ThreadedProgram
 
     async def cancelled(func, *args, **kwargs):
         raise concurrent.futures.CancelledError()
