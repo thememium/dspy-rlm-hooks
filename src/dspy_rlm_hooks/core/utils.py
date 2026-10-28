@@ -2,7 +2,23 @@
 
 from __future__ import annotations
 
+import ast
+import warnings
 from typing import Any
+
+
+def _parse_code_for_analysis(code: str) -> ast.Module:
+    """Inspect generated source without repeating invalid-escape warnings.
+
+    Speculation reparses partial/generated code frequently. Real execution
+    owns compiler diagnostics; SyntaxError and other warning types still
+    propagate, and no process-wide warning policy is changed.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="invalid escape sequence.*", category=SyntaxWarning
+        )
+        return ast.parse(code)
 
 
 def _prepend_python_code(code: str, python_code: str) -> str:

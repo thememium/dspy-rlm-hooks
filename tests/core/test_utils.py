@@ -6,10 +6,33 @@ import pytest
 
 from dspy_rlm_hooks.core.utils import (
     _assemble_execution_code,
+    _parse_code_for_analysis,
     _prepend_python_code,
     _strip_code_fences,
     _with_prompt_context,
 )
+
+
+def test_generated_code_analysis_does_not_repeat_invalid_escape_warnings():
+    import ast
+    import warnings
+
+    source = r'pattern = "\["'
+    with warnings.catch_warnings(record=True) as observed:
+        warnings.simplefilter("always")
+        tree = _parse_code_for_analysis(source)
+    assert not observed
+    assignment = tree.body[0]
+    assert isinstance(assignment, ast.Assign)
+    assert ast.literal_eval(assignment.value) == r"\["
+    # The scoped inspection filter must not hide actual compilation warnings.
+    with pytest.warns(SyntaxWarning, match="invalid escape sequence"):
+        compile(source, "<real-execution>", "exec")
+
+
+def test_generated_code_analysis_preserves_syntax_errors():
+    with pytest.raises(SyntaxError):
+        _parse_code_for_analysis("print(")
 
 
 class TestPrependPythonCode:

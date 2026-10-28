@@ -14,7 +14,7 @@ the speculation shadow during ``generate_action`` (the RLM's ``dspy.Predict``):
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from dspy.primitives.prediction import Prediction
@@ -213,12 +213,170 @@ async def test_async_iteration_wrapper_begins_turn(
 
 
 # ---------------------------------------------------------------------------
+# _run_async_to_completion
+# ---------------------------------------------------------------------------
+
+
+def test_run_async_to_completion_from_sync_context(monkeypatch):
+    """The sync path owns the loop and preserves the active context."""
+    import contextvars
+
+    from dspy_rlm_hooks.speculation.integration.streaming_turn import (
+        _run_async_to_completion,
+    )
+
+    marker = contextvars.ContextVar("marker")
+    marker.set("kept")
+
+    async def main():
+        return marker.get()
+
+    assert _run_async_to_completion(main) == "kept"
+
+
+@pytest.mark.asyncio
+async def test_run_async_to_completion_from_running_loop():
+    """A sync call inside an async caller runs on a joined private loop."""
+    import contextvars
+
+    from dspy_rlm_hooks.speculation.integration.streaming_turn import (
+        _run_async_to_completion,
+    )
+
+    marker = contextvars.ContextVar("marker")
+    marker.set("kept")
+
+    async def main():
+        return marker.get()
+
+    assert _run_async_to_completion(main) == "kept"
+
+
+# ---------------------------------------------------------------------------
+# _ThreadedProgram
+# ---------------------------------------------------------------------------
+
+
+def test_threaded_program_exposes_wrapped_predictor():
+    from dspy_rlm_hooks.speculation.integration.streaming_turn import _ThreadedProgram
+
+    def predictor():
+        return "prediction"
+
+    assert _ThreadedProgram(predictor).named_predictors() == [
+        ("generate_action", predictor)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_threaded_program_runs_sync_program_with_overrides():
+    from dspy.dsp.utils.settings import settings
+
+    from dspy_rlm_hooks.speculation.integration.streaming_turn import _ThreadedProgram
+
+    seen = {}
+
+    def program(value):
+        seen["marker"] = settings.get("threaded_program_marker")
+        return value + 1
+
+    with settings.context(threaded_program_marker="kept"):
+        assert await _ThreadedProgram(program).acall(1) == 2
+    assert seen["marker"] == "kept"
+
+
+@pytest.mark.asyncio
+async def test_threaded_program_does_not_abandon_worker(monkeypatch):
+    from anyio import to_thread
+
+    from dspy_rlm_hooks.speculation.integration.streaming_turn import _ThreadedProgram
+
+    kwargs_seen = {}
+    real_run_sync = to_thread.run_sync
+
+    async def spy(func, *args, **kwargs):
+        kwargs_seen.update(kwargs)
+        return await real_run_sync(func, *args, **kwargs)
+
+    monkeypatch.setattr(to_thread, "run_sync", spy)
+
+    assert await _ThreadedProgram(lambda: "ok").acall() == "ok"
+    assert kwargs_seen["abandon_on_cancel"] is False
+
+
+@pytest.mark.asyncio
+async def test_threaded_program_propagates_program_error():
+    from dspy_rlm_hooks.speculation.integration.streaming_turn import _ThreadedProgram
+
+    def boom():
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await _ThreadedProgram(boom).acall()
+
+
+def test_threaded_program_does_not_raise_run_finished_on_cancel():
+    """A cancelled stream must not leave the worker pointing at a dead loop.
+
+    ``abandon_on_cancel=False`` keeps the loop alive until the worker returns.
+    The worker may observe a normal cancellation, but never AnyIO's
+    ``RunFinishedError`` from a bridge call into a closed loop.
+    """
+    import asyncio
+    import contextlib
+    import threading
+    import time
+
+    from anyio import RunFinishedError
+    from anyio.from_thread import run as from_thread_run
+    from dspy.streaming import streamify
+
+    from dspy_rlm_hooks.speculation.integration.streaming_turn import _ThreadedProgram
+
+    async def noop():
+        await asyncio.sleep(0)
+
+    started = threading.Event()
+    errors = []
+
+    def program():
+        try:
+            for _ in range(40):
+                started.set()
+                from_thread_run(noop)
+                time.sleep(0.005)
+        except BaseException as exc:
+            errors.append(exc)
+            raise
+        return Prediction(output="done")
+
+    async def consume(stream):
+        async for _ in stream():
+            pass
+
+    async def main():
+        task = asyncio.create_task(consume(stream))
+        while not started.is_set():
+            await asyncio.sleep(0.001)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    stream = streamify(
+        _ThreadedProgram(program), async_streaming=True, is_async_program=True
+    )
+    asyncio.run(main())
+
+    assert not any(isinstance(exc, RunFinishedError) for exc in errors)
+
+
+# ---------------------------------------------------------------------------
 # _StreamingGenerateAction
 # ---------------------------------------------------------------------------
 
 
 def _fake_streamify(items, pred):
-    def _factory(program, *, stream_listeners, async_streaming):
+    def _factory(program, *, stream_listeners, async_streaming, **kwargs):
         if async_streaming:
 
             async def astr(*a, **k):
@@ -351,3 +509,323 @@ def test_disable_restores_generate_action_and_iteration(mock_rlm, mock_repl):
     assert mock_rlm._aexecute_iteration is orig_aiter
     assert not hasattr(mock_rlm, "_active_stream_turn")
     assert not hasattr(mock_rlm, "_streaming_fed_any")
+
+
+def test_generate_action_drains_stream_after_prediction(monkeypatch, mock_rlm):
+    """The stream is consumed past the Prediction and not pumped by DSPy's
+    sync bridge, whose producer loop outlives the consumer's return."""
+    pred = Prediction(reasoning="r", code="print(1)")
+    consumed = []
+
+    async def astr(*a, **k):
+        consumed.append("code")
+        yield StreamResponse("ga", "code", "print(1)", False)
+        consumed.append("prediction")
+        yield pred
+        consumed.append("trailer")
+        yield StreamResponse("ga", "reasoning", "ignored", False)
+        consumed.append("end")
+
+    def factory(program, *, stream_listeners, async_streaming, **kwargs):
+        assert async_streaming is True
+        return astr
+
+    monkeypatch.setattr("dspy.streaming.streamify", factory)
+    mock_rlm._speculation_original_generate_action = MagicMock()
+    mock_rlm._active_stream_turn = MagicMock()
+    mock_rlm._streaming_fed_any = False
+
+    result = _StreamingGenerateAction(mock_rlm)("variables_info", "hist", "1")
+
+    assert result is pred
+    assert consumed == ["code", "prediction", "trailer", "end"]
+
+
+def test_generate_action_keeps_prediction_when_stream_teardown_fails(
+    monkeypatch, mock_rlm
+):
+    """A failure after a complete Prediction is teardown, not a failed call."""
+    pred = Prediction(reasoning="r", code="print(1)")
+
+    async def astr(*a, **k):
+        yield pred
+        raise RuntimeError("event loop closed during teardown")
+
+    def factory(program, *, stream_listeners, async_streaming, **kwargs):
+        assert async_streaming is True
+        return astr
+
+    monkeypatch.setattr("dspy.streaming.streamify", factory)
+    orig = MagicMock(return_value="orig-result")
+    mock_rlm._speculation_original_generate_action = orig
+    mock_rlm._active_stream_turn = MagicMock()
+    mock_rlm._streaming_fed_any = False
+
+    result = _StreamingGenerateAction(mock_rlm)("variables_info", "hist", "1")
+
+    assert result is pred
+    orig.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_action_drains_async_stream_after_prediction(
+    monkeypatch, mock_rlm
+):
+    """The async iteration path also consumes past the final Prediction."""
+    pred = Prediction(reasoning="r", code="print(1)")
+    consumed = []
+
+    async def astr(*a, **k):
+        consumed.append("code")
+        yield StreamResponse("ga", "code", "print(1)", False)
+        consumed.append("prediction")
+        yield pred
+        consumed.append("trailer")
+        yield StreamResponse("ga", "reasoning", "ignored", False)
+        consumed.append("end")
+
+    def factory(program, *, stream_listeners, async_streaming, **kwargs):
+        if async_streaming:
+            return astr
+
+        def sstr(*a, **k):
+            return
+            yield
+
+        return sstr
+
+    monkeypatch.setattr("dspy.streaming.streamify", factory)
+    mock_rlm._speculation_original_generate_action = MagicMock()
+    mock_rlm._active_stream_turn = MagicMock()
+    mock_rlm._streaming_fed_any = False
+
+    result = await _StreamingGenerateAction(mock_rlm).acall(
+        "variables_info", "hist", "1"
+    )
+
+    assert result is pred
+    assert consumed == ["code", "prediction", "trailer", "end"]
+
+
+class _RaisingCloseStream:
+    """Async iterable that delivers its items, then fails on aclose()."""
+
+    def __init__(self, items) -> None:
+        self._items = items
+
+    def __aiter__(self):
+        async def iterator():
+            for item in self._items:
+                yield item
+
+        return iterator()
+
+    async def aclose(self) -> None:
+        raise RuntimeError("close boom")
+
+
+@pytest.mark.asyncio
+async def test_run_async_to_completion_propagates_from_running_loop():
+    """The private-thread branch re-raises the factory's exception."""
+    from dspy_rlm_hooks.speculation.integration.streaming_turn import (
+        _run_async_to_completion,
+    )
+
+    async def boom():
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        _run_async_to_completion(boom)
+
+
+def test_generate_action_falls_back_when_stream_has_no_prediction(
+    monkeypatch, mock_rlm
+):
+    """A stream that ends without a Prediction falls back to the original."""
+
+    async def astr(*a, **k):
+        yield "not a prediction"
+
+    def factory(program, *, stream_listeners, async_streaming, **kwargs):
+        assert async_streaming is True
+        return astr
+
+    monkeypatch.setattr("dspy.streaming.streamify", factory)
+    orig = MagicMock(return_value="orig-result")
+    mock_rlm._speculation_original_generate_action = orig
+    mock_rlm._active_stream_turn = MagicMock()
+    mock_rlm._streaming_fed_any = False
+
+    result = _StreamingGenerateAction(mock_rlm)("variables_info", "hist", "1")
+
+    assert result == "orig-result"
+    orig.assert_called_once_with("variables_info", "hist", "1")
+    assert mock_rlm._active_stream_turn is None
+
+
+def test_generate_action_ignores_close_failure_after_prediction(monkeypatch, mock_rlm):
+    """A failing aclose() does not replace an already-complete Prediction."""
+    pred = Prediction(reasoning="r", code="print(1)")
+
+    def factory(program, *, stream_listeners, async_streaming, **kwargs):
+        assert async_streaming is True
+
+        def astream(*a, **k):
+            return _RaisingCloseStream([pred])
+
+        return astream
+
+    monkeypatch.setattr("dspy.streaming.streamify", factory)
+    mock_rlm._speculation_original_generate_action = MagicMock()
+    mock_rlm._active_stream_turn = MagicMock()
+    mock_rlm._streaming_fed_any = False
+
+    result = _StreamingGenerateAction(mock_rlm)("variables_info", "hist", "1")
+
+    assert result is pred
+
+
+@pytest.mark.asyncio
+async def test_generate_action_acall_keeps_prediction_when_stream_teardown_fails(
+    monkeypatch, mock_rlm
+):
+    """acall returns the Prediction even if the stream fails after yielding it."""
+    pred = Prediction(reasoning="r", code="print(1)")
+
+    async def astr(*a, **k):
+        yield pred
+        raise RuntimeError("event loop closed during teardown")
+
+    def factory(program, *, stream_listeners, async_streaming, **kwargs):
+        assert async_streaming is True
+        return astr
+
+    monkeypatch.setattr("dspy.streaming.streamify", factory)
+    mock_rlm._speculation_original_generate_action = MagicMock()
+    mock_rlm._speculation_original_generate_action.acall = AsyncMock()
+    mock_rlm._active_stream_turn = MagicMock()
+    mock_rlm._streaming_fed_any = False
+
+    result = await _StreamingGenerateAction(mock_rlm).acall(
+        "variables_info", "hist", "1"
+    )
+
+    assert result is pred
+    mock_rlm._speculation_original_generate_action.acall.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generate_action_acall_ignores_close_failure_after_prediction(
+    monkeypatch, mock_rlm
+):
+    """acall keeps the Prediction when aclose() raises during teardown."""
+    pred = Prediction(reasoning="r", code="print(1)")
+
+    def factory(program, *, stream_listeners, async_streaming, **kwargs):
+        assert async_streaming is True
+
+        def astream(*a, **k):
+            return _RaisingCloseStream([pred])
+
+        return astream
+
+    monkeypatch.setattr("dspy.streaming.streamify", factory)
+    mock_rlm._speculation_original_generate_action = MagicMock()
+    mock_rlm._speculation_original_generate_action.acall = AsyncMock()
+    mock_rlm._active_stream_turn = MagicMock()
+    mock_rlm._streaming_fed_any = False
+
+    result = await _StreamingGenerateAction(mock_rlm).acall(
+        "variables_info", "hist", "1"
+    )
+
+    assert result is pred
+    mock_rlm._speculation_original_generate_action.acall.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generate_action_acall_falls_back_when_stream_has_no_prediction(
+    monkeypatch, mock_rlm
+):
+    """acall falls back to the original call when the stream has no Prediction."""
+
+    async def astr(*a, **k):
+        yield "not a prediction"
+
+    def factory(program, *, stream_listeners, async_streaming, **kwargs):
+        assert async_streaming is True
+        return astr
+
+    monkeypatch.setattr("dspy.streaming.streamify", factory)
+    orig = MagicMock()
+    orig.acall = AsyncMock(return_value="orig-result")
+    mock_rlm._speculation_original_generate_action = orig
+    mock_rlm._active_stream_turn = MagicMock()
+    mock_rlm._streaming_fed_any = False
+
+    result = await _StreamingGenerateAction(mock_rlm).acall(
+        "variables_info", "hist", "1"
+    )
+
+    assert result == "orig-result"
+    orig.acall.assert_awaited_once_with("variables_info", "hist", "1")
+    assert mock_rlm._active_stream_turn is None
+
+
+@pytest.mark.asyncio
+async def test_threaded_program_translates_concurrent_cancellation(monkeypatch):
+    """AnyIO's empty CancelledError becomes a real cancellation, not an LM error."""
+    import asyncio
+    import concurrent.futures
+
+    from anyio import to_thread
+
+    from dspy_rlm_hooks.speculation.integration.streaming_turn import _ThreadedProgram
+
+    async def cancelled(func, *args, **kwargs):
+        raise concurrent.futures.CancelledError()
+
+    monkeypatch.setattr(to_thread, "run_sync", cancelled)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _ThreadedProgram(lambda: None).acall()
+
+
+def test_generate_action_propagates_sync_cancellation(monkeypatch, mock_rlm):
+    """A cancelled stream must not be treated as a parse failure/fallback."""
+    import concurrent.futures
+
+    from dspy_rlm_hooks.speculation.integration import streaming_turn
+
+    def cancel(factory):
+        raise concurrent.futures.CancelledError()
+
+    monkeypatch.setattr(streaming_turn, "_run_async_to_completion", cancel)
+    mock_rlm._active_stream_turn = MagicMock()
+    wrapper = _StreamingGenerateAction(mock_rlm)
+    wrapper._stream = MagicMock()
+
+    with pytest.raises(concurrent.futures.CancelledError):
+        wrapper("variables_info", "hist", "1")
+
+
+@pytest.mark.asyncio
+async def test_generate_action_acall_propagates_cancellation(monkeypatch, mock_rlm):
+    """acall re-raises cancellation instead of falling back to the original."""
+    import concurrent.futures
+
+    async def astr(*a, **k):
+        yield "not a prediction"
+        raise concurrent.futures.CancelledError()
+
+    def factory(program, *, stream_listeners, async_streaming, **kwargs):
+        return astr
+
+    monkeypatch.setattr("dspy.streaming.streamify", factory)
+    mock_rlm._speculation_original_generate_action = MagicMock()
+    mock_rlm._speculation_original_generate_action.acall = AsyncMock()
+    mock_rlm._active_stream_turn = MagicMock()
+
+    with pytest.raises(concurrent.futures.CancelledError):
+        await _StreamingGenerateAction(mock_rlm).acall("variables_info", "hist", "1")
+    mock_rlm._speculation_original_generate_action.acall.assert_not_awaited()

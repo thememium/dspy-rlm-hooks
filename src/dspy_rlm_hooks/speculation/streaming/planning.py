@@ -9,6 +9,7 @@ import ast
 from dataclasses import dataclass, field
 from typing import Any
 
+from dspy_rlm_hooks.core.utils import _parse_code_for_analysis
 from dspy_rlm_hooks.speculation.streaming.evaluator import (
     Unresolvable,
     _bind,
@@ -144,7 +145,7 @@ def _parse_repaired(tail: str) -> list:
     if repaired is None:
         return []
     try:
-        tree = ast.parse(repaired)
+        tree = _parse_code_for_analysis(repaired)
     except SyntaxError:
         return []
     return tree.body
