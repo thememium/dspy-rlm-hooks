@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1.16 (2026-10-28)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.15...v0.1.16)
+
+### 🩹 Fixes
+
+- speculative tool calling (#11) (#11) ([e0369df](https://github.com/thememium/dspy-rlm-hooks/commit/e0369df5ce5df2dc06d1250676683cf1ff809406))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
 ## v0.1.15 (2026-10-09)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.14...v0.1.15)
