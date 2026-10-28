@@ -11,6 +11,7 @@ import signal
 from types import FunctionType
 from typing import Any
 
+from dspy_rlm_hooks.core.utils import _parse_code_for_analysis
 from dspy_rlm_hooks.speculation.shadow.analysis import (
     _bound_names,
     _comp_local_names,
@@ -152,7 +153,7 @@ def _register_segment_productions(
     call as written) that the parent maps to the real claim key it dispatched.
     """
     try:
-        tree = ast.parse(seg.source)
+        tree = _parse_code_for_analysis(seg.source)
     except SyntaxError:
         return
     for stmt in tree.body:
@@ -223,7 +224,7 @@ def _worker_exec(
     chain_counter: "_ContCounter | None" = None,
 ) -> None:
     try:
-        tree = ast.parse(seg.source)
+        tree = _parse_code_for_analysis(seg.source)
     except SyntaxError:
         conn.send(("abort", "syntax"))
         return

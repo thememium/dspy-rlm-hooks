@@ -12,6 +12,7 @@ import ast
 import builtins
 from typing import Any
 
+from dspy_rlm_hooks.core.utils import _parse_code_for_analysis
 from dspy_rlm_hooks.speculation.speculator import Speculator
 from dspy_rlm_hooks.speculation.streaming import _free_names
 
@@ -110,7 +111,7 @@ def _live_state_seed(
     """
     seed = dict(input_args)
     try:
-        tree = ast.parse(code)
+        tree = _parse_code_for_analysis(code)
         free = _snapshot_reads(tree)
     except (SyntaxError, ValueError):
         return seed

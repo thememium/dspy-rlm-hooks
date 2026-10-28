@@ -8,6 +8,8 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 
+from dspy_rlm_hooks.core.utils import _parse_code_for_analysis
+
 _COMPOUND = (
     "if ",
     "if(",
@@ -152,7 +154,7 @@ class StreamSegmenter:
             if src is None:
                 break
             try:
-                tree = ast.parse(src)
+                tree = _parse_code_for_analysis(src)
             except SyntaxError:
                 blk.dead = True  # model wrote broken code; real run will error too
                 break
@@ -326,7 +328,7 @@ def repair_tail(tail: str) -> str | None:
             )
         for cand in candidates:
             try:
-                ast.parse(cand)
+                _parse_code_for_analysis(cand)
                 return cand
             except SyntaxError:
                 continue
