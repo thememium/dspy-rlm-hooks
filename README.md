@@ -412,6 +412,14 @@ though hooks still work.
 
 ### Limitations
 
+- Malformed model output (`AdapterParseError`) propagates from streaming
+  without a second non-streaming prediction. Formatting recovery belongs
+  in the adapter or caller; transport fallback remains available.
+- With DSPy >=3.4, terminal interpreter/process failures propagate to the
+  caller immediately so it can create a fresh session. Recoverable
+  `CodeExecutionError` failures remain RLM feedback. Speculative AST analysis
+  does not repeat invalid-escape warnings; actual execution keeps its own
+  compiler diagnostics.
 - Streaming requires a streaming-capable adapter (ChatAdapter/XMLAdapter/JSONAdapter)
   and an LM that supports streaming. Subclasses that retain a built-in adapter's
   wire format (for example, a ChatAdapter with custom parse repair) also stream.
