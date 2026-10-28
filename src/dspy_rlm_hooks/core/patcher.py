@@ -112,6 +112,21 @@ def _execute_code(self: Any, repl: Any, code: str, input_args: dict[str, Any]) -
     try:
         return repl.execute(code, variables=dict(input_args))
     except Exception as exc:  # noqa: BLE001
+        # DSPy >=3.4 separates repairable submitted-code errors from fatal
+        # process/protocol failures. A dead interpreter cannot execute the
+        # model's repairs; let the owner create a new session rather than
+        # spending every remaining iteration on the same terminal error.
+        from dspy.primitives import code_interpreter
+
+        recoverable = getattr(code_interpreter, "CodeExecutionError", None)
+        # Older DSPy uses CodeInterpreterError for both categories, so keep
+        # its original feedback behavior when no distinction is available.
+        if (
+            recoverable is not None
+            and isinstance(exc, code_interpreter.CodeInterpreterError)
+            and not isinstance(exc, recoverable)
+        ):
+            raise
         return f"[Error] {exc}"
 
 
