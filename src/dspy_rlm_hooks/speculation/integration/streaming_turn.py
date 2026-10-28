@@ -18,6 +18,7 @@ from collections.abc import Callable, Coroutine
 from typing import Any
 
 from dspy.primitives.module import Module
+from dspy.utils.exceptions import AdapterParseError
 
 from dspy_rlm_hooks.speculation.integration.registry import (
     _has_speculatable,
@@ -25,6 +26,15 @@ from dspy_rlm_hooks.speculation.integration.registry import (
     _sync_registry_fns,
 )
 from dspy_rlm_hooks.speculation.shadow import shadow_builtins
+
+
+def _adapter_parse_failure(exc: BaseException) -> AdapterParseError | None:
+    """Unwrap the single program failure emitted by older DSPy streamify."""
+    if isinstance(exc, AdapterParseError):
+        return exc
+    if isinstance(exc, BaseExceptionGroup) and len(exc.exceptions) == 1:
+        return _adapter_parse_failure(exc.exceptions[0])
+    return None
 
 
 def _maybe_begin_streaming_turn(
@@ -162,9 +172,10 @@ class _StreamingGenerateAction:
     :class:`StreamTurn` so the shadow can dispatch tool calls while the model
     is still generating. Exposes both ``__call__`` (sync path, which drives the
     async stream in an owned loop) and ``acall`` (async path). If streaming is
-    unavailable (non-streaming adapter/LM, cache hit) or fails partway, it
+    unavailable (non-streaming adapter/LM, cache hit) or its transport fails, it
     falls back to the original predict and clears the active turn so the
-    Lazy/JIT shadow in ``_speculation_execute_code`` takes over.
+    Lazy/JIT shadow in ``_speculation_execute_code`` takes over. Model-output
+    parse errors propagate without an extra non-streaming prediction.
     """
 
     def __init__(self, rlm: Any) -> None:
@@ -270,12 +281,17 @@ class _StreamingGenerateAction:
             result = _run_async_to_completion(consume)
         except concurrent.futures.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             if prediction is not None:
                 # The prediction is complete; a teardown failure after it
                 # must not discard it or re-run the LM call.
                 return prediction
             self._rlm._active_stream_turn = None
+            if failure := _adapter_parse_failure(exc):
+                # This is malformed model output, not an unavailable stream.
+                # Repeating Predict can trigger another adapter fallback and
+                # regenerate different code after speculative work began.
+                raise failure from None
             return self._orig(*args, **kwargs)
         if result is not None:
             return result
@@ -306,10 +322,12 @@ class _StreamingGenerateAction:
                 self._feed_item(item)
         except concurrent.futures.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             if prediction is not None:
                 return prediction
             self._rlm._active_stream_turn = None
+            if failure := _adapter_parse_failure(exc):
+                raise failure from None
             return await self._orig.acall(*args, **kwargs)
         finally:
             close = getattr(stream, "aclose", None)
