@@ -100,9 +100,12 @@ def _scripted_generate_action(
     receives the same chunk-arrival delays, including the non-streaming baseline.
     """
 
-    def generate_action(
-        variables_info: Any, repl_history: Any, iteration: Any, **kwargs: Any
-    ) -> Any:
+    def generate_action(variables_info: Any, *args: Any, **kwargs: Any) -> Any:
+        # The history input moved from ``repl_history`` (<=3.4) to ``history``
+        # (>=3.5) and is unused here; some callers pass it positionally.
+        iteration = kwargs.get("iteration")
+        if iteration is None and args:
+            iteration = args[-1]
         idx = int(str(iteration).split("/")[0]) - 1
         it = scenario.iterations[idx]
         fenced = _fence(it.code)
