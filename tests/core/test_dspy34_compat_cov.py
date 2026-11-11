@@ -149,3 +149,51 @@ class TestCompatForwardsFactory:
         )
         assert out == "async_result"
         assert len(seen["async"]) == 7 and seen["async"][-1] is _FACTORY
+
+
+class TestCompatForwardsSubAgentRules:
+    def _mocked_rlm(self):
+        seen = {"sync": None, "async": None}
+
+        def orig_execute(self, *args):
+            seen["sync"] = args
+            return "result"
+
+        async def orig_aexecute(self, *args):
+            seen["async"] = args
+            return "async_result"
+
+        mock = MagicMock(name="PredictRLM_instance")
+        mock._execute_iteration = orig_execute
+        mock._aexecute_iteration = orig_aexecute
+        mock._process_execution_result = MagicMock(return_value="processed")
+        mock.generate_action = MagicMock()
+        mock.generate_action.forward = MagicMock(
+            return_value=MagicMock(code="generated code", reasoning="thinking"),
+        )
+        mock.generate_action.aforward = AsyncMock(
+            return_value=MagicMock(code="generated async code", reasoning="thinking"),
+        )
+        mock.max_iterations = 10
+        mock.verbose = False
+        return mock, seen
+
+    def test_sync_wrapper_forwards_sub_agent_rules(self):
+        """DSPy >=3.4.1 appends ``sub_agent_rules`` after the factory."""
+        mock, seen = self._mocked_rlm()
+        enable_predict_rlm_hooks(mock)
+        out = mock._execute_iteration(
+            "repl", [], MagicMock(), 0, {}, ["answer"], _FACTORY, "rules"
+        )
+        assert out == "result"
+        assert len(seen["sync"]) == 8 and seen["sync"][-1] == "rules"
+
+    @pytest.mark.asyncio
+    async def test_async_wrapper_forwards_sub_agent_rules(self):
+        mock, seen = self._mocked_rlm()
+        enable_predict_rlm_hooks(mock)
+        out = await mock._aexecute_iteration(
+            "repl", [], MagicMock(), 0, {}, ["answer"], _FACTORY, "rules"
+        )
+        assert out == "async_result"
+        assert len(seen["async"]) == 8 and seen["async"][-1] == "rules"

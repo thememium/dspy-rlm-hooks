@@ -151,6 +151,7 @@ def enable_predict_rlm_hooks(
         input_args: dict[str, Any],
         output_field_names: Any,
         interpreter_factory: Any = None,
+        sub_agent_rules: Any = None,
         **kw: Any,
     ) -> Any:
         # --- pre-iteration hook ---
@@ -186,30 +187,22 @@ def enable_predict_rlm_hooks(
             "prompt_context": prompt_context,
         }
         try:
-            # DSPy >=3.4 passes ``interpreter_factory`` positionally; omit it on
-            # older DSPy, where the original method takes only six arguments.
-            if interpreter_factory is None:
-                return orig_execute(
-                    self,
-                    repl,
-                    variables,
-                    history,
-                    iteration,
-                    input_args,
-                    output_field_names,
-                    **kw,
-                )
-            return orig_execute(
-                self,
+            # DSPy >=3.4 passes ``interpreter_factory`` positionally and
+            # >=3.4.1 appends ``sub_agent_rules``; omit each on older DSPy,
+            # where the original method takes fewer arguments.
+            args = (
                 repl,
                 variables,
                 history,
                 iteration,
                 input_args,
                 output_field_names,
-                interpreter_factory,
-                **kw,
             )
+            if interpreter_factory is not None:
+                args += (interpreter_factory,)
+                if sub_agent_rules is not None:
+                    args += (sub_agent_rules,)
+            return orig_execute(self, *args, **kw)
         except _StopIteration as exc:
             # post_iteration_hook set stop=True — return the stored result.
             return exc.args[0]
@@ -231,6 +224,7 @@ def enable_predict_rlm_hooks(
         input_args: dict[str, Any],
         output_field_names: Any,
         interpreter_factory: Any = None,
+        sub_agent_rules: Any = None,
         **kw: Any,
     ) -> Any:
         # --- pre-iteration hook (async) ---
@@ -265,29 +259,21 @@ def enable_predict_rlm_hooks(
             "prompt_context": prompt_context,
         }
         try:
-            # See the sync wrapper: omit ``interpreter_factory`` on DSPy <=3.3.
-            if interpreter_factory is None:
-                return await orig_aexecute(
-                    self,
-                    repl,
-                    variables,
-                    history,
-                    iteration,
-                    input_args,
-                    output_field_names,
-                    **kw,
-                )
-            return await orig_aexecute(
-                self,
+            # See the sync wrapper: omit ``interpreter_factory`` and
+            # ``sub_agent_rules`` on DSPy releases that do not pass them.
+            args = (
                 repl,
                 variables,
                 history,
                 iteration,
                 input_args,
                 output_field_names,
-                interpreter_factory,
-                **kw,
             )
+            if interpreter_factory is not None:
+                args += (interpreter_factory,)
+                if sub_agent_rules is not None:
+                    args += (sub_agent_rules,)
+            return await orig_aexecute(self, *args, **kw)
         except _StopIteration as exc:
             return exc.args[0]
 
@@ -413,7 +399,9 @@ def enable_predict_rlm_hooks(
         processed = orig_process(self, pred, *args, **kwargs)
 
         # --- post-iteration hook (mutation) ---
-        if self._hook_post_iteration:
+        # DSPy >=3.5 returns ``(REPLEntry, final_outputs)``; the PredictRLM
+        # hook API is history-based, so leave that tuple untouched.
+        if self._hook_post_iteration and not isinstance(processed, tuple):
             post_iter_out = self._hook_post_iteration(
                 iteration,
                 pred,

@@ -5,11 +5,28 @@ from types import SimpleNamespace
 import dspy
 import pytest
 from dspy.adapters import ChatAdapter, JSONAdapter, XMLAdapter
-from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
 from dspy_rlm_hooks.speculation.integration.streaming_turn import (
     _StreamingGenerateAction,
 )
+
+
+def _chunk(text: str) -> SimpleNamespace:
+    """A provider chunk in the shape ``StreamListener.receive`` reads.
+
+    Built locally so the test does not depend on litellm (DSPy >=3.5 no longer
+    ships it); ``receive`` only touches ``choices[0].delta.content`` and
+    ``choices[0].finish_reason``.
+    """
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                index=0,
+                delta=SimpleNamespace(content=text),
+                finish_reason=None,
+            )
+        ]
+    )
 
 
 @pytest.mark.parametrize(
@@ -41,13 +58,7 @@ def test_listener_accepts_adapter_subclasses(monkeypatch, base, response):
     def collect(target):
         output = []
         for start in range(0, len(response), 3):
-            chunk = ModelResponseStream(
-                choices=[
-                    StreamingChoices(
-                        index=0, delta=Delta(content=response[start : start + 3])
-                    )
-                ]
-            )
+            chunk = _chunk(response[start : start + 3])
             if item := target.receive(chunk):
                 output.append(item.chunk)
         if item := target.finalize():
@@ -79,11 +90,7 @@ def test_listener_does_not_mutate_other_listeners(monkeypatch):
     )
     wrapper._ensure()
     adapter = type("RepairingChatAdapter", (ChatAdapter,), {})()
-    chunk = ModelResponseStream(
-        choices=[
-            StreamingChoices(index=0, delta=Delta(content="[[ ## code ## ]]\nprint(1)"))
-        ]
-    )
+    chunk = _chunk("[[ ## code ## ]]\nprint(1)")
     with dspy.context(adapter=adapter):
         captured[0].receive(chunk)
     assert "RepairingChatAdapter" not in StreamListener("code").adapter_identifiers

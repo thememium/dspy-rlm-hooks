@@ -48,7 +48,7 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-from dspy_rlm_hooks.benchmark.runner import TrialRecord, _strip_timings, run_ab
+from dspy_rlm_hooks.benchmark.runner import TrialRecord, _stable_result, run_ab
 from dspy_rlm_hooks.benchmark.scenario import default_scenario
 
 
@@ -78,7 +78,7 @@ def _aggregate(name: str, recs: list[TrialRecord]) -> dict:
     speculated = [r.spec_stats.get("speculated", 0) for r in recs]
     evicted = [r.spec_stats.get("evicted", 0) for r in recs]
     steps_sig = (
-        [[i["code"], _strip_timings(i["result"])] for i in recs[0].iterations]
+        [[i["code"], _stable_result(i["result"])] for i in recs[0].iterations]
         if recs
         else []
     )
@@ -98,7 +98,7 @@ def _aggregate(name: str, recs: list[TrialRecord]) -> dict:
             {
                 "index": i["index"],
                 "code_head": i["code"][:60],
-                "result_head": _strip_timings(i["result"])[:60],
+                "result_head": _stable_result(i["result"])[:60],
                 "exec_ms": i["exec_ms"],
                 "generate_ms": i["generate_ms"],
             }

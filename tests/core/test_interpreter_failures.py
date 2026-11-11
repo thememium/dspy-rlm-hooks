@@ -1,7 +1,7 @@
 """A dead sandbox must not consume every remaining generation iteration."""
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from dspy.primitives import code_interpreter
@@ -65,11 +65,17 @@ def test_real_rlm_stops_after_first_terminal_error():
             pass
 
         def execute(self, code, variables=None):
+            if (
+                code.lstrip().startswith("def __dspy_bootstrap")
+                or "Sandbox side of the dspy facade" in code
+            ):
+                # DSPy installs its sandbox facade before generation
+                # (>=3.5 bootstrap, 3.4 dspy facade source).
+                return None
             self.executions += 1
             raise code_interpreter.CodeInterpreterError("Deno exited during execution")
 
     interpreter = DeadInterpreter()
-    lm = DummyLM([{"reasoning": "run one block", "code": "print(1)"}])
     # kwargs keep this version-gated test importable/type-checkable against
     # the older DSPy supported by this package as well.
     options: dict[str, Any] = {
@@ -77,6 +83,15 @@ def test_real_rlm_stops_after_first_terminal_error():
         "interpreter_factory": lambda: interpreter,
     }
     rlm = dspy.RLM("task -> answer", **options)
+    # DSPy >=3.5 serializes the reasoning output under its fallback name
+    # (``plan``); older releases use the field name itself.
+    action_signature = rlm.generate_action.signature
+    assert action_signature is not None
+    reasoning_field = action_signature.output_fields["reasoning"]
+    schema_extra = reasoning_field.json_schema_extra
+    extra = cast(dict[str, Any], schema_extra) if isinstance(schema_extra, dict) else {}
+    reasoning_key = extra.get("__dspy_reasoning_fallback") or "reasoning"
+    lm = DummyLM([{reasoning_key: "run one block", "code": "print(1)"}])
     enable_rlm_hooks(rlm)
     with dspy.context(lm=lm):
         with pytest.raises(code_interpreter.CodeInterpreterError, match="Deno exited"):

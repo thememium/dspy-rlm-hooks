@@ -25,6 +25,16 @@ def pytest_addoption(parser):
     )
 
 
+def pytest_collection_modifyitems(config, items):
+    """Skip real-LLM tests unless ``--run-e2e`` is passed."""
+    if config.getoption("--run-e2e"):
+        return
+    skip_e2e = pytest.mark.skip(reason="end-to-end tests require --run-e2e")
+    for item in items:
+        if item.nodeid.startswith("tests/integration/test_e2e.py"):
+            item.add_marker(skip_e2e)
+
+
 @pytest.fixture(autouse=True)
 def disable_automatic_mlflow_tracing(monkeypatch):
     """Keep non-tracing tests deterministic even when the MLflow extra is installed."""
