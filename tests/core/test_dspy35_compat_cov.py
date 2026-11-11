@@ -250,3 +250,132 @@ class TestLegacyProcessSignature:
 
         out = await patcher._aexecute_iteration(_RLM31(), *_call_args())
         assert isinstance(out, REPLHistory)
+
+
+class _RLM31Shape(_RLM35):
+    def __init__(self) -> None:
+        super().__init__()
+        self.process_args: tuple[Any, ...] | None = None
+
+    def _process_execution_result(  # ty: ignore[invalid-method-override]
+        self, pred, result, history, output_field_names
+    ):
+        self.process_args = (pred, result, history, output_field_names)
+        return REPLHistory(entries=[_entry("legacy")])
+
+
+class TestVersionDetectionFallbacks:
+    """Untestable-introspection and absent-DSPy-3.5-internals branches."""
+
+    def test_with_rlm_prelude_without_35_internals(self, monkeypatch):
+        import dspy.predict.rlm as rlm_module
+
+        if not hasattr(rlm_module, "_repl_prelude"):
+            pytest.skip("DSPy <3.5 already lacks the prelude hook")
+        monkeypatch.delattr(rlm_module, "_repl_prelude")
+        assert patcher._with_rlm_prelude("print(1)") == "print(1)"
+
+    def test_repl_session_scope_without_35_session(self, monkeypatch):
+        import dspy.predict.rlm as rlm_module
+
+        if not hasattr(rlm_module, "_repl_session"):
+            pytest.skip("DSPy <3.5 already lacks the session scope")
+        monkeypatch.delattr(rlm_module, "_repl_session")
+        with patcher._repl_session_scope():
+            pass
+
+    def test_contract_detection_survives_uninspectable_method(self, monkeypatch):
+        def boom(*args, **kwargs):
+            raise ValueError("no signature")
+
+        monkeypatch.setattr(patcher.inspect, "signature", boom)
+        rlm = _RLM31Shape()
+        assert patcher._uses_entry_tuple_contract(rlm) is False
+
+    def test_signature_kwargs_fall_back_when_uninspectable(self, monkeypatch):
+        def boom(*args, **kwargs):
+            raise ValueError("no signature")
+
+        monkeypatch.setattr(patcher.inspect, "signature", boom)
+        calls: list[tuple[Any, ...]] = []
+
+        class _Helper:
+            def _action_signature_for_current_factory(self, factory):
+                calls.append((factory,))
+                return "sig"
+
+        kwargs = patcher._generate_action_signature_kwargs(_Helper(), _FACTORY, "rules")
+        assert kwargs == {"signature": "sig"}
+        assert calls == [(_FACTORY,)]
+
+    def test_process_result_falls_back_when_uninspectable(self, monkeypatch):
+        def boom(*args, **kwargs):
+            raise ValueError("no signature")
+
+        class _Recorder:
+            args: tuple[Any, ...] | None = None
+
+            def _process_execution_result(
+                self, pred, code, result, history, output_field_names
+            ):
+                type(self).args = (pred, code, result, history, output_field_names)
+                return "processed"
+
+        monkeypatch.setattr(patcher.inspect, "signature", boom)
+        out = patcher._process_result(
+            _Recorder(), "pred", "code", "result", "hist", ["answer"]
+        )
+        assert out == "processed"
+        assert _Recorder.args == ("pred", "code", "result", "hist", ["answer"])
+
+    def test_sync_post_iteration_supports_async_hook(self):
+        rlm = _RLM35()
+
+        async def hook(iteration, pred, code, result, history):
+            return PostIterationOutput(history=history)
+
+        rlm._hook_post_iteration = hook
+        entry, final_outputs = patcher._execute_iteration(rlm, *_call_args())
+        assert entry.code == "x = 1"
+        assert final_outputs is None
+
+    def test_post_iteration_empty_history_keeps_entry(self):
+        rlm = _RLM35()
+
+        def hook(iteration, pred, code, result, history):
+            return PostIterationOutput(history=REPLHistory(entries=[]))
+
+        rlm._hook_post_iteration = hook
+        entry, final_outputs = patcher._execute_iteration(rlm, *_call_args())
+        assert entry.code == "x = 1"
+        assert final_outputs is None
+
+
+class TestAsyncPostIteration:
+    @pytest.mark.asyncio
+    async def test_async_hook_can_replace_entry(self):
+        rlm = _RLM35()
+
+        async def hook(iteration, pred, code, result, history):
+            replacement = _entry("replaced")
+            return PostIterationOutput(
+                history=REPLHistory(entries=[*history.entries, replacement])
+            )
+
+        rlm._hook_post_iteration = hook
+        entry, final_outputs = await patcher._aexecute_iteration(rlm, *_call_args())
+        assert entry.code == "replaced"
+        assert final_outputs is None
+
+    @pytest.mark.asyncio
+    async def test_async_hook_stop_uses_extract_fallback(self):
+        rlm = _RLM35()
+
+        async def hook(iteration, pred, code, result, history):
+            return PostIterationOutput(history=history, stop=True)
+
+        rlm._hook_post_iteration = hook
+        entry, final_outputs = await patcher._aexecute_iteration(rlm, *_call_args())
+        assert isinstance(entry, REPLEntry)
+        assert final_outputs == {"answer": "fallback"}
+        assert len(rlm.fallback_calls) == 1
