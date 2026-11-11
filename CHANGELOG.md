@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1.17 (2026-11-11)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.16...v0.1.17)
+
+### 🚀 Enhancements
+
+- compatibility dspy 3 5 (#12) (#12) ([55d3c60](https://github.com/thememium/dspy-rlm-hooks/commit/55d3c60a454c236d6390b8f3a6ef6b1f53ffb6e1))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
 ## v0.1.16 (2026-10-28)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.15...v0.1.16)
