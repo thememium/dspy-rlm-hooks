@@ -14,6 +14,8 @@ paths transparently.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import inspect
 import logging
 from types import MethodType
 from typing import TYPE_CHECKING, Any, cast
@@ -102,15 +104,41 @@ def _validate_rlm(rlm: Any) -> None:
         )
 
 
+def _with_rlm_prelude(code: str) -> str:
+    """Apply DSPy >=3.5's per-execution sandbox prelude when it exists.
+
+    DSPy 3.5 runs every REPL execution inside the active sandbox session and
+    prefixes a rebind prelude once the interpreter has imported ``dspy``. The
+    hook system owns ``_execute_code``, so it must reproduce both; on older
+    releases there is nothing to import and the code passes through.
+    """
+    try:
+        from dspy.predict.rlm import _repl_prelude, _with_prelude
+    except ImportError:
+        return code
+    return _with_prelude(_repl_prelude.get(), code)
+
+
+def _repl_session_scope():
+    """DSPy >=3.5's active REPL session scope, or a no-op context."""
+    try:
+        from dspy.predict.rlm import _repl_session
+    except ImportError:
+        return contextlib.nullcontext()
+    session = _repl_session.get()
+    return session.scope() if session is not None else contextlib.nullcontext()
+
+
 def _execute_code(self: Any, repl: Any, code: str, input_args: dict[str, Any]) -> Any:
     """Run ``code`` inside the REPL, prepending any persisted globals.
 
     Mirrors the original ``RLM._execute_code`` logic and is bound as a
     replacement method during :func:`enable_rlm_hooks`.
     """
-    code = _assemble_execution_code(repl, code)
+    code = _with_rlm_prelude(_assemble_execution_code(repl, code))
     try:
-        return repl.execute(code, variables=dict(input_args))
+        with _repl_session_scope():
+            return repl.execute(code, variables=dict(input_args))
     except Exception as exc:  # noqa: BLE001
         # DSPy >=3.4 separates repairable submitted-code errors from fatal
         # process/protocol failures. A dead interpreter cannot execute the
@@ -130,21 +158,193 @@ def _execute_code(self: Any, repl: Any, code: str, input_args: dict[str, Any]) -
         return f"[Error] {exc}"
 
 
+def _uses_entry_tuple_contract(rlm: Any) -> bool:
+    """Whether the RLM returns ``(REPLEntry, final_outputs)`` per iteration.
+
+    DSPy >=3.5 replaced the "processed history or final ``Prediction``" return
+    of ``_execute_iteration``/``_process_execution_result`` with that tuple and
+    removed ``history`` from ``_process_execution_result``'s parameters. Older
+    releases take history explicitly, which is the structural signal used here
+    (the class, not the instance, so mock-based callers keep the old contract).
+    """
+    method = getattr(type(rlm), "_process_execution_result", None)
+    if method is None:
+        return False
+    try:
+        parameters = inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        return False
+    return "history" not in parameters
+
+
+def _action_history_kwarg(rlm: Any) -> str:
+    """``generate_action``'s history input name: ``history`` on DSPy >=3.5."""
+    return "history" if _uses_entry_tuple_contract(rlm) else "repl_history"
+
+
 def _generate_action_signature_kwargs(
-    rlm: Any, interpreter_factory: Any
+    rlm: Any, interpreter_factory: Any, sub_agent_rules: Any = None
 ) -> dict[str, Any]:
     """Per-call ``signature=`` kwargs for ``generate_action``.
 
     DSPy >=3.4 passes ``interpreter_factory`` down to ``_execute_iteration``/
     ``_aexecute_iteration`` and derives a per-call action signature from it via
-    ``RLM._action_signature_for_current_factory``. Older DSPy has neither the
-    trailing argument nor the helper, so this returns ``{}`` and the call stays
-    exactly as it was on DSPy <=3.3.
+    ``RLM._action_signature_for_current_factory``. DSPy >=3.4.1 passes the
+    interpreter's sub-agent guidance (``sub_agent_rules``) alongside it, and
+    the helper requires both. Older DSPy has neither, so this returns ``{}``
+    and the call stays exactly as it was on DSPy <=3.3.
     """
     helper = getattr(rlm, "_action_signature_for_current_factory", None)
     if helper is None or interpreter_factory is None:
         return {}
+    try:
+        parameters = inspect.signature(helper).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    if "sub_agent_rules" in parameters:
+        rules = sub_agent_rules
+        if rules is None:
+            rules = getattr(rlm, "_initial_sub_agent_rules", "")
+        return {"signature": helper(interpreter_factory, rules)}
     return {"signature": helper(interpreter_factory)}
+
+
+def _process_result(
+    rlm: Any,
+    action: Any,
+    code: str,
+    result: Any,
+    history: Any,
+    output_field_names: list[str],
+) -> Any:
+    """Call the release-appropriate ``_process_execution_result`` signature.
+
+    DSPy 3.1 takes ``(pred, result, history, output_field_names)`` — the code
+    lives on ``pred``. 3.2–3.4 add a separate ``code`` argument, and 3.5 drops
+    ``history`` and returns ``(REPLEntry, final_outputs)``.
+    """
+    if _uses_entry_tuple_contract(rlm):
+        return rlm._process_execution_result(action, code, result, output_field_names)
+
+    method = getattr(type(rlm), "_process_execution_result", None)
+    try:
+        parameters = inspect.signature(method).parameters if method else {}
+    except (TypeError, ValueError):
+        parameters = {}
+    if parameters and "code" not in parameters:
+        return rlm._process_execution_result(
+            action, result, history, output_field_names
+        )
+    return rlm._process_execution_result(
+        action, code, result, history, output_field_names
+    )
+
+
+def _hook_history(rlm: Any, history: Any, iteration: int) -> Any:
+    """History view passed to pre/post-execution hooks.
+
+    DSPy >=3.5 hands iterations a ``dspy.History`` and keeps the turn's
+    ``REPLEntry`` list in the caller's loop. The hook API has always exposed
+    ``REPLHistory`` (``append``/``format``), so build that view from the
+    entries the hook system tracks for the current turn.
+    """
+    if not _uses_entry_tuple_contract(rlm):
+        return history
+    entries = [] if iteration == 0 else list(getattr(rlm, "_hook_turn_entries", []))
+    return _repl_history_type()(entries=entries)
+
+
+def _track_entry_tuple(
+    rlm: Any, iteration: int, processed: tuple[Any, Any]
+) -> list[Any]:
+    """Record this iteration's entry for the hook-visible history."""
+    entries = [] if iteration == 0 else list(getattr(rlm, "_hook_turn_entries", []))
+    entries.append(processed[0])
+    rlm._hook_turn_entries = entries
+    return entries
+
+
+def _post_iteration_entry_tuple(
+    rlm: Any,
+    iteration: int,
+    action: Any,
+    code: str,
+    result: Any,
+    processed: tuple[Any, dict[str, Any] | None],
+    variables: list[REPLVariable],
+    history: Any,
+    output_field_names: list[str],
+) -> tuple[Any, dict[str, Any] | None]:
+    """Run the post-iteration hook against DSPy >=3.5's tuple contract.
+
+    The hook API exposes the accumulated ``REPLHistory``; 3.5 keeps its entries
+    in the caller's loop, so the hook system tracks them per turn and returns
+    the (possibly replaced) last entry for that loop to record. ``stop=True``
+    feeds the accumulated history to the extract fallback and returns its
+    outputs as this iteration's final outputs.
+    """
+    entries = _track_entry_tuple(rlm, iteration, processed)
+    if processed[1] is not None or not rlm._hook_post_iteration:
+        return processed
+    repl_entry, final_outputs = processed
+
+    post_iter_out = rlm._hook_post_iteration(
+        iteration, action, code, result, _repl_history_type()(entries=entries)
+    )
+    if asyncio.iscoroutine(post_iter_out):
+        post_iter_out = _run_async(post_iter_out)
+    post_iter_out = cast(PostIterationOutput, post_iter_out)
+
+    entries = list(post_iter_out.history.entries)
+    rlm._hook_turn_entries = entries
+    repl_entry = entries[-1] if entries else repl_entry
+
+    if post_iter_out.stop:
+        fallback = rlm._extract_fallback(
+            variables, history, entries, output_field_names
+        )
+        return repl_entry, {
+            name: getattr(fallback, name) for name in output_field_names
+        }
+    return repl_entry, final_outputs
+
+
+async def _apost_iteration_entry_tuple(
+    rlm: Any,
+    iteration: int,
+    action: Any,
+    code: str,
+    result: Any,
+    processed: tuple[Any, dict[str, Any] | None],
+    variables: list[REPLVariable],
+    history: Any,
+    output_field_names: list[str],
+) -> tuple[Any, dict[str, Any] | None]:
+    """Async :func:`_post_iteration_entry_tuple`."""
+    entries = _track_entry_tuple(rlm, iteration, processed)
+    if processed[1] is not None or not rlm._hook_post_iteration:
+        return processed
+    repl_entry, final_outputs = processed
+
+    post_iter_out = rlm._hook_post_iteration(
+        iteration, action, code, result, _repl_history_type()(entries=entries)
+    )
+    if asyncio.iscoroutine(post_iter_out):
+        post_iter_out = await post_iter_out
+    post_iter_out = cast(PostIterationOutput, post_iter_out)
+
+    entries = list(post_iter_out.history.entries)
+    rlm._hook_turn_entries = entries
+    repl_entry = entries[-1] if entries else repl_entry
+
+    if post_iter_out.stop:
+        fallback = rlm._extract_fallback(
+            variables, history, entries, output_field_names
+        )
+        return repl_entry, {
+            name: getattr(fallback, name) for name in output_field_names
+        }
+    return repl_entry, final_outputs
 
 
 def _execute_iteration(
@@ -156,7 +356,8 @@ def _execute_iteration(
     input_args: dict[str, Any],
     output_field_names: list[str],
     interpreter_factory: Any = None,
-) -> Prediction | REPLHistory:
+    sub_agent_rules: Any = None,
+) -> Prediction | REPLHistory | tuple[Any, dict[str, Any] | None]:
     """Synchronous RLM iteration with hook support.
 
     Lifecycle::
@@ -166,9 +367,11 @@ def _execute_iteration(
     # --- pre-iteration hook ---
     iteration_python_code = ""
     prompt_context = ""
+    # DSPy >=3.5 passes dspy.History; hooks keep the REPLHistory contract.
+    hook_history = _hook_history(self, history, iteration)
     if self._hook_pre_iteration:
         pre_iter_out = self._hook_pre_iteration(
-            iteration, variables, history, input_args
+            iteration, variables, hook_history, input_args
         )
         if asyncio.iscoroutine(pre_iter_out):
             pre_iter_out = _run_async(pre_iter_out)
@@ -184,9 +387,9 @@ def _execute_iteration(
         [variable.format() for variable in variables], prompt_context
     )
     action = self.generate_action(
-        **_generate_action_signature_kwargs(self, interpreter_factory),
+        **_generate_action_signature_kwargs(self, interpreter_factory, sub_agent_rules),
         variables_info=variables_info,
-        repl_history=history,
+        **{_action_history_kwarg(self): history},
         iteration=f"{iteration + 1}/{_max_iterations(self)}",
     )
 
@@ -205,14 +408,12 @@ def _execute_iteration(
     except SyntaxError as exc:
         code = action.code
         result = f"[Error] {exc}"
-        return self._process_execution_result(
-            action, code, result, history, output_field_names
-        )
+        return _process_result(self, action, code, result, history, output_field_names)
 
     # --- pre-execution hook ---
     if self._hook_pre_execution:
         pre_exec_out = self._hook_pre_execution(
-            iteration, code, variables, history, input_args
+            iteration, code, variables, hook_history, input_args
         )
         if asyncio.iscoroutine(pre_exec_out):
             pre_exec_out = _run_async(pre_exec_out)
@@ -226,7 +427,7 @@ def _execute_iteration(
     # --- post-execution hook ---
     if self._hook_post_execution:
         post_exec_out = self._hook_post_execution(
-            iteration, code, result, variables, history, input_args
+            iteration, code, result, variables, hook_history, input_args
         )
         if asyncio.iscoroutine(post_exec_out):
             post_exec_out = _run_async(post_exec_out)
@@ -234,11 +435,22 @@ def _execute_iteration(
         result = post_exec_out.result
 
     # --- process result ---
-    processed = self._process_execution_result(
-        action, code, result, history, output_field_names
-    )
+    processed = _process_result(self, action, code, result, history, output_field_names)
 
     # --- post-iteration hook ---
+    if _uses_entry_tuple_contract(self):
+        return _post_iteration_entry_tuple(
+            self,
+            iteration,
+            action,
+            code,
+            result,
+            processed,
+            variables,
+            history,
+            output_field_names,
+        )
+
     if self._hook_post_iteration and isinstance(processed, _repl_history_type()):
         post_iter_out = self._hook_post_iteration(
             iteration, action, code, result, processed
@@ -263,7 +475,8 @@ async def _aexecute_iteration(
     input_args: dict[str, Any],
     output_field_names: list[str],
     interpreter_factory: Any = None,
-) -> Prediction | REPLHistory:
+    sub_agent_rules: Any = None,
+) -> Prediction | REPLHistory | tuple[Any, dict[str, Any] | None]:
     """Asynchronous RLM iteration with hook support.
 
     Mirrors :func:`_execute_iteration` but uses ``await`` for async hooks
@@ -272,9 +485,11 @@ async def _aexecute_iteration(
     # --- pre-iteration hook ---
     iteration_python_code = ""
     prompt_context = ""
+    # DSPy >=3.5 passes dspy.History; hooks keep the REPLHistory contract.
+    hook_history = _hook_history(self, history, iteration)
     if self._hook_pre_iteration:
         pre_iter_out = self._hook_pre_iteration(
-            iteration, variables, history, input_args
+            iteration, variables, hook_history, input_args
         )
         if asyncio.iscoroutine(pre_iter_out):
             pre_iter_out = await pre_iter_out
@@ -290,9 +505,9 @@ async def _aexecute_iteration(
         [variable.format() for variable in variables], prompt_context
     )
     pred = await self.generate_action.acall(
-        **_generate_action_signature_kwargs(self, interpreter_factory),
+        **_generate_action_signature_kwargs(self, interpreter_factory, sub_agent_rules),
         variables_info=variables_info,
-        repl_history=history,
+        **{_action_history_kwarg(self): history},
         iteration=f"{iteration + 1}/{_max_iterations(self)}",
     )
 
@@ -311,14 +526,12 @@ async def _aexecute_iteration(
     except SyntaxError as exc:
         code = pred.code
         result = f"[Error] {exc}"
-        return self._process_execution_result(
-            pred, code, result, history, output_field_names
-        )
+        return _process_result(self, pred, code, result, history, output_field_names)
 
     # --- pre-execution hook ---
     if self._hook_pre_execution:
         pre_exec_out = self._hook_pre_execution(
-            iteration, code, variables, history, input_args
+            iteration, code, variables, hook_history, input_args
         )
         if asyncio.iscoroutine(pre_exec_out):
             pre_exec_out = await pre_exec_out
@@ -332,7 +545,7 @@ async def _aexecute_iteration(
     # --- post-execution hook ---
     if self._hook_post_execution:
         post_exec_out = self._hook_post_execution(
-            iteration, code, result, variables, history, input_args
+            iteration, code, result, variables, hook_history, input_args
         )
         if asyncio.iscoroutine(post_exec_out):
             post_exec_out = await post_exec_out
@@ -340,11 +553,22 @@ async def _aexecute_iteration(
         result = post_exec_out.result
 
     # --- process result ---
-    processed = self._process_execution_result(
-        pred, code, result, history, output_field_names
-    )
+    processed = _process_result(self, pred, code, result, history, output_field_names)
 
     # --- post-iteration hook ---
+    if _uses_entry_tuple_contract(self):
+        return await _apost_iteration_entry_tuple(
+            self,
+            iteration,
+            pred,
+            code,
+            result,
+            processed,
+            variables,
+            history,
+            output_field_names,
+        )
+
     if self._hook_post_iteration and isinstance(processed, _repl_history_type()):
         post_iter_out = self._hook_post_iteration(
             iteration, pred, code, result, processed
