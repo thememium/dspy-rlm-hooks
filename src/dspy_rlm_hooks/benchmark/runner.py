@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -77,6 +78,19 @@ def _strip_timings(result_text: str) -> str:
             continue
         out.append(line)
     return "\n".join(out)
+
+
+_SESSION_ID_RE = re.compile(r"'session': '[^']*'")
+
+
+def _stable_result(result_text: str) -> str:
+    """Timing-stripped result with volatile DSPy wire session ids normalized.
+
+    DSPy >=3.5 encodes FINAL outputs as wire values carrying the sandbox
+    session id, which differs per interpreter instance. That is scheduling
+    noise, not a step difference, so it must not break equivalence.
+    """
+    return _SESSION_ID_RE.sub("'session': '<session>'", _strip_timings(result_text))
 
 
 def _parse_timings(result_text: str) -> dict:
