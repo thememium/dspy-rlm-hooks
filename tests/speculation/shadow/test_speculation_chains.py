@@ -457,9 +457,9 @@ def test_llm_spec_fns_error_paths(monkeypatch):
 
     import dspy_rlm_hooks.speculation.integration as SI
 
-    monkeypatch.setattr(dspy.settings, "lm", None, raising=False)
-    with pytest.raises(Exception):
-        fns["llm_query"]("x")
+    with dspy.context(lm=None):
+        with pytest.raises(Exception):
+            fns["llm_query"]("x")
 
     # LMResponse-shaped response extraction
     class FakeLMResponse:
