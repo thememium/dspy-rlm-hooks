@@ -22,6 +22,22 @@ from dspy_rlm_hooks.speculation.integration.streaming_turn import (
 from dspy_rlm_hooks.speculation.shadow import shadow_builtins
 
 
+def _forwarded_iteration_args(
+    interpreter_factory: Any, sub_agent_rules: Any
+) -> tuple[Any, ...]:
+    """Trailing args to forward to the wrapped iteration method.
+
+    DSPy 3.4.x appends ``interpreter_factory``; DSPy >=3.4.1 append
+    ``sub_agent_rules`` after it. Each is forwarded only when supplied, so the
+    inner method (raw DSPy <=3.3 or the hook-patched one) keeps its own arity.
+    """
+    if interpreter_factory is None:
+        return ()
+    if sub_agent_rules is None:
+        return (interpreter_factory,)
+    return (interpreter_factory, sub_agent_rules)
+
+
 def _speculation_execute_iteration(
     self: Any,
     repl: Any,
@@ -31,19 +47,19 @@ def _speculation_execute_iteration(
     input_args: dict[str, Any],
     output_field_names: list[str],
     interpreter_factory: Any = None,
+    sub_agent_rules: Any = None,
 ) -> Any:
     """Wrapped sync iteration: begin the streaming turn before generation.
 
-    DSPy >=3.4 appends a trailing ``interpreter_factory`` argument; it is
-    forwarded only when present so the inner method (either the raw DSPy
-    <=3.3 method or the hook-patched one) sees its expected arity.
+    ``interpreter_factory`` and ``sub_agent_rules`` are forwarded only when
+    present so the inner method sees the arity its DSPy release calls it with.
     """
     _maybe_begin_streaming_turn(self, repl, input_args)
     inner = self._speculation_original_execute_iteration
     args = (repl, variables, history, iteration, input_args, output_field_names)
-    if interpreter_factory is None:
-        return inner(*args)
-    return inner(*args, interpreter_factory)
+    return inner(
+        *args, *_forwarded_iteration_args(interpreter_factory, sub_agent_rules)
+    )
 
 
 async def _speculation_aexecute_iteration(
@@ -55,14 +71,15 @@ async def _speculation_aexecute_iteration(
     input_args: dict[str, Any],
     output_field_names: list[str],
     interpreter_factory: Any = None,
+    sub_agent_rules: Any = None,
 ) -> Any:
     """Wrapped async iteration: begin the streaming turn before generation."""
     _maybe_begin_streaming_turn(self, repl, input_args)
     inner = self._speculation_original_aexecute_iteration
     args = (repl, variables, history, iteration, input_args, output_field_names)
-    if interpreter_factory is None:
-        return await inner(*args)
-    return await inner(*args, interpreter_factory)
+    return await inner(
+        *args, *_forwarded_iteration_args(interpreter_factory, sub_agent_rules)
+    )
 
 
 def _speculation_execute_code(
