@@ -98,8 +98,8 @@ def test_benchmark_cli_detects_mismatch(tmp_path, monkeypatch):
     def broken(rlm, scenario, pace_ms):
         ga = orig(rlm, scenario, pace_ms)
 
-        def gen(variables_info, repl_history, iteration):
-            pred = ga(variables_info, repl_history, iteration)
+        def gen(variables_info, iteration, **kwargs):
+            pred = ga(variables_info, iteration, **kwargs)
             from dspy import Prediction
 
             code = pred.code
