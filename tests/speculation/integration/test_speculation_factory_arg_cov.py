@@ -53,3 +53,38 @@ async def test_async_wrapper_forwards_seventh_positional():
     assert out == "async-result"
     assert len(seen["call"]) == 7
     assert seen["call"][0] == "repl" and seen["call"][-1] is _FACTORY
+
+
+def test_sync_wrapper_forwards_sub_agent_rules():
+    """DSPy >=3.4.1 appends ``sub_agent_rules`` after the factory."""
+    seen = {}
+
+    def orig_execute(self, *args):
+        seen["call"] = (self, *args)
+        return "sync-result"
+
+    rlm = SimpleNamespace(_speculation_original_execute_iteration=orig_execute)
+    out = _speculation_execute_iteration(
+        rlm, "repl", [], "hist", 0, {}, ["answer"], _FACTORY, "rules"
+    )
+    assert out == "sync-result"
+    assert len(seen["call"]) == 8
+    assert seen["call"][-2] is _FACTORY and seen["call"][-1] == "rules"
+
+
+@pytest.mark.asyncio
+async def test_async_wrapper_forwards_sub_agent_rules():
+    """Same for the async wrapper."""
+    seen = {}
+
+    async def orig_aexecute(self, *args):
+        seen["call"] = (self, *args)
+        return "async-result"
+
+    rlm = SimpleNamespace(_speculation_original_aexecute_iteration=orig_aexecute)
+    out = await _speculation_aexecute_iteration(
+        rlm, "repl", [], "hist", 0, {}, ["answer"], _FACTORY, "rules"
+    )
+    assert out == "async-result"
+    assert len(seen["call"]) == 8
+    assert seen["call"][-2] is _FACTORY and seen["call"][-1] == "rules"
