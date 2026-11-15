@@ -51,7 +51,7 @@ dev = [
   "python-dotenv>=1.2.2",
   "ruff>=0.15.13",
   "ty>=0.0.37",
-  "usechange>=0.1.44",
+  "usechange>=0.1.49",
 ]
 
 [tool.pytest.ini_options]
