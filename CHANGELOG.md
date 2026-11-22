@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.1.18 (2026-11-22)
+
+[Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.17...v0.1.18)
+
+### 💅 Refactors
+
+- **pyproject.toml**: limit pytest xdist workers to half CPUs to reduce fan usage ([3b8f67d](https://github.com/thememium/dspy-rlm-hooks/commit/3b8f67d0b020f93f9b98a2729edf6d04feb3cd7f))
+
+### 🏡 Chore
+
+- **deps**: bump usechange to 0.1.53 ([7ce5941](https://github.com/thememium/dspy-rlm-hooks/commit/7ce5941acef6f50ac1b9af86f83981ec28aad585))
+- **pytest**: add pytest-xdist for parallel test execution ([d79aabb](https://github.com/thememium/dspy-rlm-hooks/commit/d79aabb5e68e3212abb40eaccec1997cbbf47ab7))
+- **deps**: bump usechange to 0.1.49 ([1e9b49e](https://github.com/thememium/dspy-rlm-hooks/commit/1e9b49e5f320072f2c820180609b09364b0a9a0a))
+
+### Contributors
+
+- Edward Boswell <thememium@gmail.com>
+
 ## v0.1.17 (2026-11-11)
 
 [Compare changes](https://github.com/thememium/dspy-rlm-hooks/compare/v0.1.16...v0.1.17)
